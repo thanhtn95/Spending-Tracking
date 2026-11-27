@@ -593,51 +593,25 @@
       ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
       : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
     try {
-      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs, weekday, fxRates, rule503020, yearly, subAudit] = await Promise.all([
+      // Stage 1: Critical Overview + Ledger data first for fast first paint
+      const [summary, txs, budgets, wallets, templates, prefs] = await Promise.all([
         apiFetch(`/api/v1/spending/monthly?${q}`),
         apiFetch(txUrl),
-        apiFetch(`/api/v1/spending/trend?months=6`),
         apiFetch(`/api/v1/budgets?${q}`),
-        apiFetch(`/api/v1/recurring`),
-        apiFetch(`/api/v1/goals`),
-        apiFetch(`/api/v1/ious`),
         apiFetch(`/api/v1/wallets`),
         apiFetch(`/api/v1/templates`),
-        apiFetch(`/api/v1/rules`),
-        apiFetch(`/api/v1/tags`),
-        apiFetch(`/api/v1/spending/comparison?${q}`),
-        apiFetch(`/api/v1/spending/forecast?${q}`),
         apiFetch(`/api/v1/preferences`),
-        apiFetch(`/api/v1/spending/weekday?months=3`),
-        apiFetch(`/api/v1/fx/rates`),
-        apiFetch(`/api/v1/spending/rule-50-30-20?${q}`),
-        apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear || state.year}`),
-        apiFetch(`/api/v1/spending/subscriptions`),
       ]);
       state.baseCurrency = summary?.base_currency || "VND";
       state.wallets = wallets || [];
       state.templates = templates || [];
-      state.rules = rules || [];
-      state.tags = tags || [];
       if (prefs) state.prefs = prefs;
-      if (fxRates?.rates_vs_usd) {
-        state.fxRates = fxRates.rates_vs_usd;
-        updateFxConverter();
-      }
       state.selectedTxIds.clear();
       syncBulkBar();
       renderSummary(summary);
       renderPreferences(state.prefs);
-      renderForecast(forecast);
-      renderWeekday(weekday);
-      renderComparison(comparison);
-      renderRule503020(rule503020);
-      renderYearlyWrapped(yearly);
-      renderSubscriptionAudit(subAudit);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
-      renderRules(state.rules);
-      syncTagFilter(state.tags);
       state.transactions = txs || [];
       const todayIso = new Date().toISOString().slice(0, 10);
       const todaySpentEl = document.getElementById("today-spent");
@@ -649,12 +623,44 @@
       }
       renderTransactions();
       renderCalendarHeatmap(state.transactions);
-      renderTrend(trend || []);
       renderBudgets(budgets || []);
       renderSafeToSpend(budgets || []);
-      renderRecurring(recurring);
-      renderGoals(goals || []);
-      renderIous(ious || []);
+
+      // Stage 2: Secondary Planning & Tools analytics in parallel (non-blocking)
+      Promise.all([
+        apiFetch(`/api/v1/spending/trend?months=6`).catch(() => []),
+        apiFetch(`/api/v1/recurring`).catch(() => null),
+        apiFetch(`/api/v1/goals`).catch(() => []),
+        apiFetch(`/api/v1/ious`).catch(() => []),
+        apiFetch(`/api/v1/rules`).catch(() => []),
+        apiFetch(`/api/v1/tags`).catch(() => []),
+        apiFetch(`/api/v1/spending/comparison?${q}`).catch(() => null),
+        apiFetch(`/api/v1/spending/forecast?${q}`).catch(() => null),
+        apiFetch(`/api/v1/spending/weekday?months=3`).catch(() => null),
+        apiFetch(`/api/v1/fx/rates`).catch(() => null),
+        apiFetch(`/api/v1/spending/rule-50-30-20?${q}`).catch(() => null),
+        apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear || state.year}`).catch(() => null),
+        apiFetch(`/api/v1/spending/subscriptions`).catch(() => null),
+      ]).then(([trend, recurring, goals, ious, rules, tags, comparison, forecast, weekday, fxRates, rule503020, yearly, subAudit]) => {
+        state.rules = rules || [];
+        state.tags = tags || [];
+        if (fxRates?.rates_vs_usd) {
+          state.fxRates = fxRates.rates_vs_usd;
+          updateFxConverter();
+        }
+        renderForecast(forecast);
+        renderWeekday(weekday);
+        renderComparison(comparison);
+        renderRule503020(rule503020);
+        renderYearlyWrapped(yearly);
+        renderSubscriptionAudit(subAudit);
+        renderRules(state.rules);
+        syncTagFilter(state.tags);
+        renderTrend(trend || []);
+        renderRecurring(recurring);
+        renderGoals(goals || []);
+        renderIous(ious || []);
+      });
       if (state.rangeMode && state.rangeStart && state.rangeEnd) {
         const rangeRes = await apiFetch(
           `/api/v1/spending/range?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}`

@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::from_env().map_err(|e| format!("Configuration error: {e}"))?;
 
     let db = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(16)
         .connect(&config.database_url)
         .await?;
 

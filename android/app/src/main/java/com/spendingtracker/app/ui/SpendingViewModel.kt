@@ -60,11 +60,14 @@ import com.spendingtracker.app.data.YearlyWrappedResponse
 import com.spendingtracker.app.data.ZeroBalanceRequest
 import com.spendingtracker.app.widget.SpendingWidgetProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -74,6 +77,16 @@ import java.time.YearMonth
 data class PendingMediaUpload(
     val uris: List<Uri>,
     val sourceType: String?
+)
+
+private data class Stage1Result(
+    val summary: retrofit2.Response<MonthlySpendingResponse>,
+    val txs: retrofit2.Response<List<TransactionRecord>>,
+    val range: retrofit2.Response<RangeSpendingResponse>?,
+    val budgets: retrofit2.Response<List<BudgetRecord>>?,
+    val wallets: retrofit2.Response<List<WalletRecord>>?,
+    val templates: retrofit2.Response<List<QuickTemplateRecord>>?,
+    val prefs: retrofit2.Response<UserPreferencesResponse>?
 )
 
 data class UiState(
@@ -150,6 +163,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
     private var queuedShareUpload: PendingMediaUpload? = null
+    private var refreshJob: Job? = null
 
     init {
         if (_uiState.value.isAuthenticated) {
@@ -260,6 +274,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save preferences") }
             }
@@ -277,6 +293,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Split failed") }
             }
@@ -295,6 +313,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Bulk delete failed") }
             }
@@ -315,6 +335,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Bulk update failed") }
             }
@@ -356,6 +378,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Network error")
@@ -392,6 +416,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Network error")
@@ -416,6 +442,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Password change failed") }
             }
@@ -450,39 +478,45 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
     fun refreshDashboard() {
         if (!_uiState.value.isAuthenticated) return
         val ym = _uiState.value.selectedMonth
-        viewModelScope.launch {
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                val summaryRes = api.getMonthlySpending(ym.year, ym.monthValue)
                 val rStart = _uiState.value.rangeStart
                 val rEnd = _uiState.value.rangeEnd
-                val txRes = if (rStart != null && rEnd != null) {
-                    api.getTransactions(startDate = rStart, endDate = rEnd, status = "confirmed")
-                } else {
-                    api.getTransactions(year = ym.year, month = ym.monthValue, status = "confirmed")
-                }
-                val rangeRes = if (rStart != null && rEnd != null) {
-                    api.getRangeSpending(rStart, rEnd)
-                } else null
-                val budgetsRes = api.getBudgets(ym.year, ym.monthValue)
-                val trendRes = api.getSpendingTrend(6)
-                val recurringRes = api.getRecurring()
-                val catsRes = api.getCategories()
-                val goalsRes = api.getGoals()
-                val iousRes = api.getIous()
-                val walletsRes = api.getWallets()
-                val templatesRes = api.getTemplates()
-                val rulesRes = api.getRules()
-                val tagsRes = api.getTags()
-                val compRes = api.getMonthlyComparison(ym.year, ym.monthValue)
-                val forecastRes = api.getForecast(ym.year, ym.monthValue)
-                val prefsRes = api.getPreferences()
-                val weekdayRes = api.getWeekdayBreakdown(3)
-                val fxRes = api.getFxRates()
-                val rule503020Res = api.getRule503020(ym.year, ym.monthValue)
                 val wrappedYear = _uiState.value.yearlyWrapped?.year ?: ym.year
-                val yearlyRes = api.getYearlyWrapped(wrappedYear)
-                val subAuditRes = api.getSubscriptionAudit()
+
+                // Stage 1: Critical Home + Ledger data in parallel (~1 RTT instead of 21 sequential calls)
+                val (summaryRes, txRes, rangeRes, budgetsRes, walletsRes, templatesRes, prefsRes) = supervisorScope {
+                    val sDef = async { api.getMonthlySpending(ym.year, ym.monthValue) }
+                    val tDef = async {
+                        if (rStart != null && rEnd != null) {
+                            api.getTransactions(startDate = rStart, endDate = rEnd, status = "confirmed")
+                        } else {
+                            api.getTransactions(year = ym.year, month = ym.monthValue, status = "confirmed")
+                        }
+                    }
+                    val rDef = async {
+                        if (rStart != null && rEnd != null) runCatching { api.getRangeSpending(rStart, rEnd) }.getOrNull()
+                        else null
+                    }
+                    val bDef = async { runCatching { api.getBudgets(ym.year, ym.monthValue) }.getOrNull() }
+                    val wDef = async { runCatching { api.getWallets() }.getOrNull() }
+                    val tplDef = async { runCatching { api.getTemplates() }.getOrNull() }
+                    val pDef = async { runCatching { api.getPreferences() }.getOrNull() }
+                    arrayOf(sDef.await(), tDef.await(), rDef.await(), bDef.await(), wDef.await(), tplDef.await(), pDef.await())
+                }.let { arr ->
+                    @Suppress("UNCHECKED_CAST")
+                    Stage1Result(
+                        summary = arr[0] as retrofit2.Response<MonthlySpendingResponse>,
+                        txs = arr[1] as retrofit2.Response<List<TransactionRecord>>,
+                        range = arr[2] as retrofit2.Response<RangeSpendingResponse>?,
+                        budgets = arr[3] as retrofit2.Response<List<BudgetRecord>>?,
+                        wallets = arr[4] as retrofit2.Response<List<WalletRecord>>?,
+                        templates = arr[5] as retrofit2.Response<List<QuickTemplateRecord>>?,
+                        prefs = arr[6] as retrofit2.Response<UserPreferencesResponse>?
+                    )
+                }
 
                 if (summaryRes.code() == 401 || txRes.code() == 401) {
                     logout()
@@ -500,36 +534,76 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         )
                         SpendingWidgetProvider.notifyDataChanged(getApplication<Application>().applicationContext)
                     }
+                    // Immediately paint Home & Ledger and clear loading spinner
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             monthlySpending = summaryBody,
-                            comparison = if (compRes.isSuccessful) compRes.body() else it.comparison,
-                            forecast = if (forecastRes.isSuccessful) forecastRes.body() else it.forecast,
-                            preferences = if (prefsRes.isSuccessful) prefsRes.body() else it.preferences,
-                            weekdayBreakdown = if (weekdayRes.isSuccessful) weekdayRes.body() else it.weekdayBreakdown,
-                            fxRates = if (fxRes.isSuccessful) fxRes.body() else it.fxRates,
-                            rule503020 = if (rule503020Res.isSuccessful) rule503020Res.body() else it.rule503020,
-                            yearlyWrapped = if (yearlyRes.isSuccessful) yearlyRes.body() else it.yearlyWrapped,
-                            subscriptionAudit = if (subAuditRes.isSuccessful) subAuditRes.body() else it.subscriptionAudit,
+                            preferences = if (prefsRes?.isSuccessful == true) prefsRes.body() else it.preferences,
                             globalSearch = null,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
                             transactions = txRes.body().orEmpty(),
-                            wallets = if (walletsRes.isSuccessful) walletsRes.body().orEmpty() else it.wallets,
-                            templates = if (templatesRes.isSuccessful) templatesRes.body().orEmpty() else it.templates,
-                            rules = if (rulesRes.isSuccessful) rulesRes.body().orEmpty() else it.rules,
-                            tags = if (tagsRes.isSuccessful) tagsRes.body().orEmpty() else it.tags,
-                            budgets = if (budgetsRes.isSuccessful) budgetsRes.body().orEmpty() else it.budgets,
-                            trend = if (trendRes.isSuccessful) trendRes.body().orEmpty() else it.trend,
-                            recurring = if (recurringRes.isSuccessful) recurringRes.body() else it.recurring,
-                            goals = if (goalsRes.isSuccessful) goalsRes.body().orEmpty() else it.goals,
-                            ious = if (iousRes.isSuccessful) iousRes.body().orEmpty() else it.ious,
-                            categories = if (catsRes.isSuccessful && !catsRes.body().isNullOrEmpty()) {
-                                catsRes.body()!!.map { c -> c.name }
-                            } else it.categories,
+                            wallets = if (walletsRes?.isSuccessful == true) walletsRes.body().orEmpty() else it.wallets,
+                            templates = if (templatesRes?.isSuccessful == true) templatesRes.body().orEmpty() else it.templates,
+                            budgets = if (budgetsRes?.isSuccessful == true) budgetsRes.body().orEmpty() else it.budgets,
                             offlineQueueCount = offlineQueue.count()
                         )
                     }
+
+                    // Stage 2: Secondary Plan & More analytics in parallel (non-blocking)
+                    supervisorScope {
+                        val trendDef = async { runCatching { api.getSpendingTrend(6) }.getOrNull() }
+                        val recDef = async { runCatching { api.getRecurring() }.getOrNull() }
+                        val catsDef = async { runCatching { api.getCategories() }.getOrNull() }
+                        val goalsDef = async { runCatching { api.getGoals() }.getOrNull() }
+                        val iousDef = async { runCatching { api.getIous() }.getOrNull() }
+                        val rulesDef = async { runCatching { api.getRules() }.getOrNull() }
+                        val tagsDef = async { runCatching { api.getTags() }.getOrNull() }
+                        val compDef = async { runCatching { api.getMonthlyComparison(ym.year, ym.monthValue) }.getOrNull() }
+                        val foreDef = async { runCatching { api.getForecast(ym.year, ym.monthValue) }.getOrNull() }
+                        val wdDef = async { runCatching { api.getWeekdayBreakdown(3) }.getOrNull() }
+                        val fxDef = async { runCatching { api.getFxRates() }.getOrNull() }
+                        val rule50Def = async { runCatching { api.getRule503020(ym.year, ym.monthValue) }.getOrNull() }
+                        val yearlyDef = async { runCatching { api.getYearlyWrapped(wrappedYear) }.getOrNull() }
+                        val subDef = async { runCatching { api.getSubscriptionAudit() }.getOrNull() }
+
+                        val trendRes = trendDef.await()
+                        val recurringRes = recDef.await()
+                        val catsRes = catsDef.await()
+                        val goalsRes = goalsDef.await()
+                        val iousRes = iousDef.await()
+                        val rulesRes = rulesDef.await()
+                        val tagsRes = tagsDef.await()
+                        val compRes = compDef.await()
+                        val forecastRes = foreDef.await()
+                        val weekdayRes = wdDef.await()
+                        val fxRes = fxDef.await()
+                        val rule503020Res = rule50Def.await()
+                        val yearlyRes = yearlyDef.await()
+                        val subAuditRes = subDef.await()
+
+                        _uiState.update {
+                            it.copy(
+                                comparison = if (compRes?.isSuccessful == true) compRes.body() else it.comparison,
+                                forecast = if (forecastRes?.isSuccessful == true) forecastRes.body() else it.forecast,
+                                weekdayBreakdown = if (weekdayRes?.isSuccessful == true) weekdayRes.body() else it.weekdayBreakdown,
+                                fxRates = if (fxRes?.isSuccessful == true) fxRes.body() else it.fxRates,
+                                rule503020 = if (rule503020Res?.isSuccessful == true) rule503020Res.body() else it.rule503020,
+                                yearlyWrapped = if (yearlyRes?.isSuccessful == true) yearlyRes.body() else it.yearlyWrapped,
+                                subscriptionAudit = if (subAuditRes?.isSuccessful == true) subAuditRes.body() else it.subscriptionAudit,
+                                rules = if (rulesRes?.isSuccessful == true) rulesRes.body().orEmpty() else it.rules,
+                                tags = if (tagsRes?.isSuccessful == true) tagsRes.body().orEmpty() else it.tags,
+                                trend = if (trendRes?.isSuccessful == true) trendRes.body().orEmpty() else it.trend,
+                                recurring = if (recurringRes?.isSuccessful == true) recurringRes.body() else it.recurring,
+                                goals = if (goalsRes?.isSuccessful == true) goalsRes.body().orEmpty() else it.goals,
+                                ious = if (iousRes?.isSuccessful == true) iousRes.body().orEmpty() else it.ious,
+                                categories = if (catsRes?.isSuccessful == true && !catsRes.body().isNullOrEmpty()) {
+                                    catsRes.body()!!.map { c -> c.name }
+                                } else it.categories
+                            )
+                        }
+                    }
+
                     // Persist offline read-only cache snapshot
                     val snap = _uiState.value
                     dashboardCache.save(
@@ -558,6 +632,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                     }
                     _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 val hasCache = _uiState.value.monthlySpending != null
                 _uiState.update {
@@ -652,6 +728,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         }
                     )
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isUploading = false, errorMessage = e.localizedMessage ?: "Upload failed")
@@ -740,6 +818,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to load drafts")
@@ -781,6 +861,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Confirm failed")
@@ -826,6 +908,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to add transaction")
@@ -873,6 +957,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Update failed")
@@ -894,6 +980,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Delete failed")
@@ -915,6 +1003,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to save budget")
@@ -935,6 +1025,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add category") }
             }
@@ -956,6 +1048,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoadingInsights = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoadingInsights = false, errorMessage = e.localizedMessage ?: "Insights failed")
@@ -974,6 +1068,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add goal") }
             }
@@ -999,6 +1095,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add IOU") }
             }
@@ -1029,6 +1127,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to zero balance")
@@ -1049,6 +1149,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Template failed") }
             }
@@ -1074,6 +1176,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save template") }
             }
@@ -1108,6 +1212,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add wallet") }
             }
@@ -1124,6 +1230,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Transfer failed") }
             }
@@ -1161,6 +1269,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Search failed") }
             }
@@ -1195,6 +1305,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Merchant lookup failed") }
             }
@@ -1210,6 +1322,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Suggestions failed") }
             }
@@ -1227,6 +1341,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save rule") }
             }
@@ -1253,6 +1369,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Export failed") }
             }
@@ -1273,6 +1391,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 } else {
                     _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Import failed") }
             }

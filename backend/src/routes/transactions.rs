@@ -219,12 +219,39 @@ struct TypeTotalsRow {
     credit_count: i64,
 }
 
+pub async fn user_cycle_bounds(
+    db: &sqlx::PgPool,
+    user_id: Uuid,
+    year: i32,
+    month: u32,
+) -> Result<(NaiveDate, NaiveDate), AppError> {
+    let start_day: i16 = sqlx::query_scalar("SELECT cycle_start_day FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?
+        .unwrap_or(1)
+        .clamp(1, 28);
+    if start_day <= 1 {
+        return month_bounds(year, month);
+    }
+    let start = NaiveDate::from_ymd_opt(year, month, start_day as u32)
+        .ok_or_else(|| AppError::BadRequest(format!("Invalid cycle date {year}-{month}-{start_day}")))?;
+    let (next_year, next_month) = if month == 12 {
+        (year + 1, 1)
+    } else {
+        (year, month + 1)
+    };
+    let end = NaiveDate::from_ymd_opt(next_year, next_month, start_day as u32)
+        .ok_or_else(|| AppError::BadRequest("Invalid next cycle date".to_string()))?;
+    Ok((start, end))
+}
+
 pub async fn monthly_spending(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<MonthlyQuery>,
 ) -> Result<Json<MonthlySpendingResponse>, AppError> {
-    let (start_date, end_date) = month_bounds(params.year, params.month)?;
+    let (start_date, end_date) = user_cycle_bounds(&state.db, auth.user_id, params.year, params.month).await?;
 
     let carry_forward_balance: Decimal = sqlx::query_scalar(
         r#"
@@ -473,7 +500,7 @@ pub async fn list_transactions(
             let today = Utc::now().date_naive();
             let y = params.year.unwrap_or(today.year());
             let m = params.month.unwrap_or(today.month());
-            month_bounds(y, m)?
+            user_cycle_bounds(&state.db, auth.user_id, y, m).await?
         }
     };
 
@@ -1020,7 +1047,13 @@ pub async fn list_budgets(
     auth: AuthUser,
     Query(params): Query<MonthlyQuery>,
 ) -> Result<Json<Vec<BudgetRecord>>, AppError> {
-    let (start_date, end_date) = month_bounds(params.year, params.month)?;
+    let (start_date, end_date) = user_cycle_bounds(&state.db, auth.user_id, params.year, params.month).await?;
+    let (prev_y, prev_m) = if params.month == 1 {
+        (params.year - 1, 12)
+    } else {
+        (params.year, params.month - 1)
+    };
+    let (prev_start, prev_end) = user_cycle_bounds(&state.db, auth.user_id, prev_y, prev_m).await?;
 
     let budgets: Vec<BudgetRecord> = sqlx::query_as(
         r#"
@@ -1029,8 +1062,29 @@ pub async fn list_budgets(
             b.category_id,
             c.name AS category_name,
             b.monthly_limit,
+            CASE
+                WHEN b.rollover THEN
+                    GREATEST(
+                        0,
+                        b.monthly_limit + (
+                            b.monthly_limit - COALESCE((
+                                SELECT SUM(COALESCE(pt.base_amount, pt.amount))
+                                FROM transactions pt
+                                WHERE pt.user_id = b.user_id
+                                  AND pt.category_id = b.category_id
+                                  AND pt.status = 'confirmed'
+                                  AND pt.is_transfer = FALSE
+                                  AND pt.tx_type = 'debit'
+                                  AND pt.tx_date >= $4
+                                  AND pt.tx_date < $5
+                            ), 0)
+                        )
+                    )
+                ELSE b.monthly_limit
+            END AS effective_limit,
             COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS spent,
-            b.currency
+            b.currency,
+            b.rollover
         FROM budgets b
         JOIN categories c ON c.id = b.category_id
         LEFT JOIN transactions t
@@ -1042,13 +1096,15 @@ pub async fn list_budgets(
            AND t.tx_date >= $2
            AND t.tx_date < $3
         WHERE b.user_id = $1
-        GROUP BY b.id, b.category_id, c.name, b.monthly_limit, b.currency
+        GROUP BY b.id, b.category_id, c.name, b.monthly_limit, b.currency, b.rollover
         ORDER BY c.name
         "#,
     )
     .bind(auth.user_id)
     .bind(start_date)
     .bind(end_date)
+    .bind(prev_start)
+    .bind(prev_end)
     .fetch_all(&state.db)
     .await?;
 
@@ -1083,18 +1139,20 @@ pub async fn upsert_budget(
         .filter(|s| !s.is_empty())
         .map(|s| s.to_uppercase())
         .unwrap_or_else(|| state.config.default_currency.clone());
+    let rollover = payload.rollover.unwrap_or(false);
 
     let today = Utc::now().date_naive();
-    let (start_date, end_date) = month_bounds(today.year(), today.month())?;
+    let (start_date, end_date) = user_cycle_bounds(&state.db, auth.user_id, today.year(), today.month()).await?;
 
     let id: Uuid = sqlx::query_scalar(
         r#"
-        INSERT INTO budgets (user_id, category_id, monthly_limit, currency, updated_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        INSERT INTO budgets (user_id, category_id, monthly_limit, currency, rollover, updated_at)
+        VALUES ($1, $2, $3, $4, $5, NOW())
         ON CONFLICT (user_id, category_id)
         DO UPDATE SET
             monthly_limit = EXCLUDED.monthly_limit,
             currency      = EXCLUDED.currency,
+            rollover      = EXCLUDED.rollover,
             updated_at    = NOW()
         RETURNING id
         "#,
@@ -1103,6 +1161,7 @@ pub async fn upsert_budget(
     .bind(category_id)
     .bind(payload.monthly_limit)
     .bind(&currency)
+    .bind(rollover)
     .fetch_one(&state.db)
     .await?;
 
@@ -1113,6 +1172,7 @@ pub async fn upsert_budget(
         WHERE user_id = $1
           AND category_id = $2
           AND status = 'confirmed'
+          AND is_transfer = FALSE
           AND tx_type = 'debit'
           AND tx_date >= $3
           AND tx_date < $4
@@ -1130,8 +1190,10 @@ pub async fn upsert_budget(
         category_id,
         category_name,
         monthly_limit: payload.monthly_limit,
+        effective_limit: payload.monthly_limit,
         spent,
         currency,
+        rollover,
     }))
 }
 

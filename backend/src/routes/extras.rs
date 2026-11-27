@@ -5,10 +5,11 @@ use crate::{
         BackupTemplate, BackupTransaction, BackupWallet, BulkTransactionsRequest,
         BulkTransactionsResponse, CategoryMomChange, CategorySpending,
         CreateDraftNotificationRequest, CreateTemplateRequest, CreateWalletRequest,
-        MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, QuickTemplateRecord,
-        RangeSpendingQuery, RangeSpendingResponse, SplitTransactionRequest, TagSpending,
-        TopMerchantItem, TransactionRecord, TransferWalletRequest, TransferWalletResponse,
-        UpsertMerchantRuleRequest, WalletRecord,
+        ForecastAndHealthResponse, MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery,
+        NetWorthPoint, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
+        SpendingAlertItem, SplitTransactionRequest, TagSpending, TopMerchantItem,
+        TransactionRecord, TransferWalletRequest, TransferWalletResponse,
+        UpdatePreferencesRequest, UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
     },
     routes::AppState,
     services::{
@@ -1784,6 +1785,338 @@ pub async fn bulk_transactions(
 
     Ok(Json(BulkTransactionsResponse {
         affected_count: res.rows_affected() as usize,
+    }))
+}
+
+// ================================
+// User Preferences: Payday Cycle & Travel/Event Mode (#6 & #7)
+// ================================
+
+async fn load_preferences_inner(
+    state: &AppState,
+    user_id: Uuid,
+) -> Result<UserPreferencesResponse, AppError> {
+    let (cycle_start_day, active_event_tag, active_event_currency): (
+        i16,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT cycle_start_day, active_event_tag, active_event_currency FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let active_event_spent: Decimal = if let Some(ref tag) = active_event_tag {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+            FROM transactions
+            WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+              AND tx_type = 'debit' AND $2 = ANY(tags)
+            "#,
+        )
+        .bind(user_id)
+        .bind(tag)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        Decimal::ZERO
+    };
+
+    Ok(UserPreferencesResponse {
+        cycle_start_day,
+        active_event_tag,
+        active_event_currency,
+        active_event_spent,
+        base_currency: state.config.default_currency.clone(),
+    })
+}
+
+pub async fn get_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<UserPreferencesResponse>, AppError> {
+    Ok(Json(load_preferences_inner(&state, auth.user_id).await?))
+}
+
+pub async fn update_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<UpdatePreferencesRequest>,
+) -> Result<Json<UserPreferencesResponse>, AppError> {
+    if let Some(day) = payload.cycle_start_day {
+        if !(1..=28).contains(&day) {
+            return Err(AppError::BadRequest(
+                "cycle_start_day must be between 1 and 28".to_string(),
+            ));
+        }
+        sqlx::query("UPDATE users SET cycle_start_day = $2 WHERE id = $1")
+            .bind(auth.user_id)
+            .bind(day)
+            .execute(&state.db)
+            .await?;
+    }
+
+    if let Some(ref raw_tag) = payload.active_event_tag {
+        let cleaned = clean_tags(&[raw_tag.clone()]).into_iter().next();
+        sqlx::query("UPDATE users SET active_event_tag = $2 WHERE id = $1")
+            .bind(auth.user_id)
+            .bind(&cleaned)
+            .execute(&state.db)
+            .await?;
+    }
+
+    if let Some(ref raw_cur) = payload.active_event_currency {
+        let cur = raw_cur.trim().to_uppercase();
+        let val = if cur.is_empty() { None } else { Some(cur) };
+        sqlx::query("UPDATE users SET active_event_currency = $2 WHERE id = $1")
+            .bind(auth.user_id)
+            .bind(&val)
+            .execute(&state.db)
+            .await?;
+    }
+
+    Ok(Json(load_preferences_inner(&state, auth.user_id).await?))
+}
+
+// ================================
+// End-of-Month Cash-Flow Forecast, Net Worth Trajectory & Anomaly / Price-Hike Alerts (#2, #4, #5)
+// ================================
+
+pub async fn spending_forecast(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<MonthlyQuery>,
+) -> Result<Json<ForecastAndHealthResponse>, AppError> {
+    use chrono::Datelike;
+
+    let (start_date, end_date) =
+        crate::routes::transactions::user_cycle_bounds(&state.db, auth.user_id, params.year, params.month)
+            .await?;
+    let today = Utc::now().date_naive();
+
+    // 1. Current running balance through end_date
+    let current_running_balance: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(
+            SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE -COALESCE(base_amount, amount) END),
+            0
+        )
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_date < $2
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(end_date)
+    .fetch_one(&state.db)
+    .await?;
+
+    // 2. Burn rate in current cycle
+    let spent_in_cycle: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_type = 'debit' AND tx_date >= $2 AND tx_date < $3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_one(&state.db)
+    .await?;
+
+    let elapsed_days = if today >= start_date && today < end_date {
+        ((today - start_date).num_days() + 1).max(1)
+    } else {
+        (end_date - start_date).num_days().max(1)
+    };
+    let remaining_days = if today >= start_date && today < end_date {
+        ((end_date - today).num_days() - 1).max(0)
+    } else {
+        0
+    };
+    let daily_burn_rate = (spent_in_cycle / Decimal::from(elapsed_days)).round_dp(0);
+
+    // 3. Upcoming unpaid recurring bills expected in this cycle
+    let upcoming_recurring_total: Decimal = sqlx::query_scalar(
+        r#"
+        WITH rec AS (
+            SELECT LOWER(TRIM(vendor)) AS vkey,
+                   ROUND(AVG(COALESCE(base_amount, amount)), 2) AS avg_amt,
+                   MAX(tx_date) AS last_date
+            FROM transactions
+            WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE AND tx_type = 'debit'
+            GROUP BY LOWER(TRIM(vendor))
+            HAVING BOOL_OR(is_recurring) = TRUE OR COUNT(DISTINCT DATE_TRUNC('month', tx_date)) >= 2
+        )
+        SELECT COALESCE(SUM(avg_amt), 0)
+        FROM rec
+        WHERE last_date < $2
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .fetch_one(&state.db)
+    .await?;
+
+    let projected_month_end_balance = current_running_balance
+        - upcoming_recurring_total
+        - (daily_burn_rate * Decimal::from(remaining_days));
+
+    // 4. Net Worth Trajectory (last 6 months: wallet initial balances + cumulative net balance)
+    let wallets_initial: Decimal = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(initial_balance), 0) FROM wallets WHERE user_id = $1",
+    )
+    .bind(auth.user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let mut buckets: Vec<(i32, u32)> = Vec::with_capacity(6);
+    let mut y = params.year;
+    let mut m = params.month as i32;
+    for _ in 0..6 {
+        buckets.push((y, m as u32));
+        m -= 1;
+        if m == 0 {
+            m = 12;
+            y -= 1;
+        }
+    }
+    buckets.reverse();
+
+    let mut net_worth_points: Vec<NetWorthPoint> = Vec::with_capacity(6);
+    for (by, bm) in buckets {
+        let (_, b_end) =
+            crate::routes::transactions::user_cycle_bounds(&state.db, auth.user_id, by, bm).await?;
+        let cum: Decimal = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE -COALESCE(base_amount, amount) END),
+                0
+            )
+            FROM transactions
+            WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+              AND tx_date < $2
+            "#,
+        )
+        .bind(auth.user_id)
+        .bind(b_end)
+        .fetch_one(&state.db)
+        .await?;
+        net_worth_points.push(NetWorthPoint {
+            year: by,
+            month: bm,
+            net_worth: wallets_initial + cum,
+        });
+    }
+
+    // 5. Subscription Price-Hike & Anomaly Alerts (pure SQL, $0, 0 AI calls)
+    let mut alerts: Vec<SpendingAlertItem> = Vec::new();
+    let cur = state.config.default_currency.clone();
+
+    // 5a. Price hikes: recurring vendors whose latest charge is >= 10% above prior avg
+    let hikes: Vec<(String, Decimal, Decimal)> = sqlx::query_as(
+        r#"
+        WITH ranked AS (
+            SELECT
+                vendor,
+                LOWER(TRIM(vendor)) AS vkey,
+                COALESCE(base_amount, amount) AS amt,
+                tx_date,
+                ROW_NUMBER() OVER (PARTITION BY LOWER(TRIM(vendor)) ORDER BY tx_date DESC, created_at DESC) AS rn
+            FROM transactions
+            WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+              AND tx_type = 'debit'
+        ),
+        stats AS (
+            SELECT
+                vkey,
+                MAX(CASE WHEN rn = 1 THEN vendor END) AS vendor,
+                MAX(CASE WHEN rn = 1 THEN amt END) AS latest_amt,
+                MAX(CASE WHEN rn = 1 THEN tx_date END) AS latest_date,
+                AVG(CASE WHEN rn > 1 THEN amt END) AS prior_avg,
+                COUNT(*) AS cnt
+            FROM ranked
+            GROUP BY vkey
+        )
+        SELECT vendor, latest_amt, ROUND(prior_avg, 0) AS prior_avg
+        FROM stats
+        WHERE cnt >= 2
+          AND prior_avg > 0
+          AND latest_date >= $2
+          AND latest_amt >= prior_avg * 1.10
+        ORDER BY (latest_amt - prior_avg) DESC
+        LIMIT 3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (vendor, latest, prior) in hikes {
+        let pct = (((latest - prior) / prior) * Decimal::from(100)).round_dp(0);
+        alerts.push(SpendingAlertItem {
+            kind: "price_hike".to_string(),
+            title: format!("Price hike: {vendor} (+{pct}%)"),
+            detail: format!("Latest {latest} vs usual {prior} {cur}"),
+            amount: latest,
+            currency: cur.clone(),
+        });
+    }
+
+    // 5b. Category anomalies: single transaction in this cycle >= 2.5x category avg (with >= 3 historical tx)
+    let anomalies: Vec<(String, String, Decimal, Decimal)> = sqlx::query_as(
+        r#"
+        WITH cat_avg AS (
+            SELECT category_id, AVG(COALESCE(base_amount, amount)) AS avg_amt, COUNT(*) AS cnt
+            FROM transactions
+            WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE AND tx_type = 'debit'
+            GROUP BY category_id
+            HAVING COUNT(*) >= 3
+        )
+        SELECT t.vendor, COALESCE(c.name, 'Uncategorized'), COALESCE(t.base_amount, t.amount), ROUND(ca.avg_amt, 0)
+        FROM transactions t
+        JOIN cat_avg ca ON ca.category_id = t.category_id
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1 AND t.status = 'confirmed' AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit' AND t.tx_date >= $2 AND t.tx_date < $3
+          AND COALESCE(t.base_amount, t.amount) >= ca.avg_amt * 2.5
+        ORDER BY COALESCE(t.base_amount, t.amount) DESC
+        LIMIT 3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (vendor, cat_name, amt, avg_amt) in anomalies {
+        alerts.push(SpendingAlertItem {
+            kind: "anomaly".to_string(),
+            title: format!("Unusually large {cat_name}: {vendor}"),
+            detail: format!("{amt} vs your {cat_name} avg of {avg_amt} {cur}"),
+            amount: amt,
+            currency: cur.clone(),
+        });
+    }
+
+    let _ = today.year();
+    Ok(Json(ForecastAndHealthResponse {
+        year: params.year,
+        month: params.month,
+        base_currency: cur,
+        current_running_balance,
+        upcoming_recurring_total,
+        daily_burn_rate,
+        remaining_days,
+        projected_month_end_balance,
+        net_worth_points,
+        alerts,
     }))
 }
 

@@ -293,6 +293,8 @@ class MainActivity : FragmentActivity() {
                         onLogRecurringClick = { bill -> viewModel.logRecurringBillNow(bill) },
                         onBulkDeleteClick = { ids -> viewModel.bulkDeleteTransactions(ids) },
                         onBulkCategoryClick = { ids, cat -> viewModel.bulkUpdateCategory(ids, cat) },
+                        onSavePreferences = { day, tag, cur -> viewModel.updatePreferences(day, tag, cur) },
+                        onEndEventClick = { viewModel.updatePreferences(null, "", "") },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)
@@ -412,7 +414,9 @@ class MainActivity : FragmentActivity() {
                         AddTransactionDialog(
                             categories = state.categories,
                             wallets = state.wallets,
-                            defaultCurrency = state.monthlySpending?.baseCurrency ?: "VND",
+                            defaultCurrency = state.preferences?.activeEventCurrency?.takeIf { it.isNotBlank() }
+                                ?: state.monthlySpending?.baseCurrency ?: "VND",
+                            defaultTag = state.preferences?.activeEventTag,
                             onDismiss = { showAddDialog = false },
                             onAdd = { txDate, vendor, amount, txType, currency, categoryName, desc, isRecurring, walletId, tags ->
                                 viewModel.createManualTransaction(
@@ -427,8 +431,8 @@ class MainActivity : FragmentActivity() {
                         SetBudgetDialog(
                             categories = state.categories,
                             onDismiss = { showBudgetDialog = false },
-                            onSave = { cat, limit ->
-                                viewModel.upsertBudget(cat, limit)
+                            onSave = { cat, limit, rollover ->
+                                viewModel.upsertBudget(cat, limit, rollover)
                                 showBudgetDialog = false
                             }
                         )

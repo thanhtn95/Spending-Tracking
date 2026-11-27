@@ -487,13 +487,14 @@ fun EditTransactionDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val evalEditAmt = com.spendingtracker.app.data.MathEval.evaluate(amount)
+                    val editPreview = if (amount.any { it in "+-*/kKmM" } && evalEditAmt != null) " (= ${com.spendingtracker.app.data.MathEval.formatForApi(evalEditAmt)})" else ""
                     OutlinedTextField(
                         value = amount,
                         onValueChange = { amount = it },
-                        label = { Text("Amount") },
+                        label = { Text("Amount$editPreview") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.weight(1.3f)
                     )
                     OutlinedTextField(
@@ -592,12 +593,14 @@ fun EditTransactionDialog(
             }
         },
         confirmButton = {
+            val evaluated = com.spendingtracker.app.data.MathEval.evaluate(amount)
             Button(
                 shape = RoundedCornerShape(10.dp),
                 onClick = {
-                    onSave(txDate, vendor, amount, txType, currency.ifBlank { "VND" }, categoryName, description, isRecurring, walletId, parsedTags)
+                    val amtStr = evaluated?.let { com.spendingtracker.app.data.MathEval.formatForApi(it) } ?: amount
+                    onSave(txDate, vendor, amtStr, txType, currency.ifBlank { "VND" }, categoryName, description, isRecurring, walletId, parsedTags)
                 },
-                enabled = vendor.isNotBlank() && amount.isNotBlank()
+                enabled = vendor.isNotBlank() && evaluated != null
             ) {
                 Text("Save")
             }
@@ -630,6 +633,7 @@ fun AddTransactionDialog(
     categories: List<String> = DEFAULT_CATEGORIES,
     wallets: List<com.spendingtracker.app.data.WalletRecord> = emptyList(),
     defaultCurrency: String = "VND",
+    defaultTag: String? = null,
     onDismiss: () -> Unit,
     onAdd: (
         txDate: String,
@@ -651,7 +655,7 @@ fun AddTransactionDialog(
     var currency by remember { mutableStateOf(defaultCurrency) }
     var categoryName by remember { mutableStateOf(categories.firstOrNull() ?: "Groceries") }
     var walletId by remember { mutableStateOf<String?>(null) }
-    var tagsText by remember { mutableStateOf("") }
+    var tagsText by remember { mutableStateOf(defaultTag.orEmpty()) }
     var description by remember { mutableStateOf("") }
     var isRecurring by remember { mutableStateOf(false) }
     var catMenuExpanded by remember { mutableStateOf(false) }
@@ -690,13 +694,14 @@ fun AddTransactionDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val evalEditAmt = com.spendingtracker.app.data.MathEval.evaluate(amount)
+                    val editPreview = if (amount.any { it in "+-*/kKmM" } && evalEditAmt != null) " (= ${com.spendingtracker.app.data.MathEval.formatForApi(evalEditAmt)})" else ""
                     OutlinedTextField(
                         value = amount,
                         onValueChange = { amount = it },
-                        label = { Text("Amount") },
+                        label = { Text("Amount$editPreview") },
                         singleLine = true,
                         shape = RoundedCornerShape(10.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         modifier = Modifier.weight(1.3f)
                     )
                     OutlinedTextField(
@@ -795,12 +800,14 @@ fun AddTransactionDialog(
             }
         },
         confirmButton = {
+            val evaluated = com.spendingtracker.app.data.MathEval.evaluate(amount)
             Button(
                 shape = RoundedCornerShape(10.dp),
                 onClick = {
-                    onAdd(txDate, vendor, amount, txType, currency.ifBlank { defaultCurrency }, categoryName, description, isRecurring, walletId, parsedTags)
+                    val amtStr = evaluated?.let { com.spendingtracker.app.data.MathEval.formatForApi(it) } ?: amount
+                    onAdd(txDate, vendor, amtStr, txType, currency.ifBlank { defaultCurrency }, categoryName, description, isRecurring, walletId, parsedTags)
                 },
-                enabled = vendor.isNotBlank() && amount.isNotBlank()
+                enabled = vendor.isNotBlank() && evaluated != null
             ) {
                 Text("Save")
             }
@@ -815,10 +822,11 @@ fun AddTransactionDialog(
 fun SetBudgetDialog(
     categories: List<String> = DEFAULT_CATEGORIES,
     onDismiss: () -> Unit,
-    onSave: (categoryName: String, monthlyLimit: String) -> Unit
+    onSave: (categoryName: String, monthlyLimit: String, rollover: Boolean) -> Unit
 ) {
     var categoryName by remember { mutableStateOf(categories.firstOrNull() ?: "Groceries") }
     var limit by remember { mutableStateOf("") }
+    var rollover by remember { mutableStateOf(false) }
     var catMenuExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
@@ -860,12 +868,16 @@ fun SetBudgetDialog(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.fillMaxWidth()
                 )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = rollover, onCheckedChange = { rollover = it })
+                    Text("Rollover unused budget to next month", style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         confirmButton = {
             Button(
                 shape = RoundedCornerShape(10.dp),
-                onClick = { onSave(categoryName, limit) },
+                onClick = { onSave(categoryName, limit, rollover) },
                 enabled = limit.isNotBlank()
             ) {
                 Text("Save Budget")

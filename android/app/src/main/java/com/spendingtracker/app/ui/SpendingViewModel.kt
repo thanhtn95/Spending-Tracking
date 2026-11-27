@@ -16,6 +16,7 @@ import com.spendingtracker.app.data.CreateTemplateRequest
 import com.spendingtracker.app.data.CreateTransactionRequest
 import com.spendingtracker.app.data.CreateWalletRequest
 import com.spendingtracker.app.data.DraftTransactionPreview
+import com.spendingtracker.app.data.ForecastAndHealthResponse
 import com.spendingtracker.app.data.GoalRecord
 import com.spendingtracker.app.data.IngestResponse
 import com.spendingtracker.app.data.IouRecord
@@ -39,9 +40,11 @@ import com.spendingtracker.app.data.TokenStore
 import com.spendingtracker.app.data.TransactionRecord
 import com.spendingtracker.app.data.TransferWalletRequest
 import com.spendingtracker.app.data.UpdateGoalRequest
+import com.spendingtracker.app.data.UpdatePreferencesRequest
 import com.spendingtracker.app.data.UpdateTransactionRequest
 import com.spendingtracker.app.data.UpsertBudgetRequest
 import com.spendingtracker.app.data.UpsertMerchantRuleRequest
+import com.spendingtracker.app.data.UserPreferencesResponse
 import com.spendingtracker.app.data.WalletRecord
 import com.spendingtracker.app.data.ZeroBalanceRequest
 import com.spendingtracker.app.widget.SpendingWidgetProvider
@@ -77,6 +80,8 @@ data class UiState(
     val rangeSummary: RangeSpendingResponse? = null,
     val monthlySpending: MonthlySpendingResponse? = null,
     val comparison: MonthlyComparisonResponse? = null,
+    val forecast: ForecastAndHealthResponse? = null,
+    val preferences: UserPreferencesResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -182,7 +187,13 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             _uiState.update { it.copy(errorMessage = "Try: '50k coffee cash #work' or '+15m salary'") }
             return
         }
-        val cur = _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+        val prefs = _uiState.value.preferences
+        val cur = prefs?.activeEventCurrency?.takeIf { it.isNotBlank() }
+            ?: _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+        val mergedTags = buildList {
+            addAll(parsed.tags)
+            prefs?.activeEventTag?.takeIf { it.isNotBlank() && !contains(it) }?.let { add(it) }
+        }
         createManualTransaction(
             txDate = java.time.LocalDate.now().toString(),
             vendor = parsed.vendor,
@@ -193,8 +204,30 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             description = null,
             isRecurring = false,
             walletId = parsed.walletId,
-            tags = parsed.tags
+            tags = mergedTags
         )
+    }
+
+    fun updatePreferences(cycleStartDay: Int?, activeEventTag: String?, activeEventCurrency: String?) {
+        viewModelScope.launch {
+            try {
+                val res = api.updatePreferences(
+                    UpdatePreferencesRequest(
+                        cycleStartDay = cycleStartDay,
+                        activeEventTag = activeEventTag,
+                        activeEventCurrency = activeEventCurrency
+                    )
+                )
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update { it.copy(preferences = res.body(), statusMessage = "Preferences saved") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save preferences") }
+            }
+        }
     }
 
     fun splitTransaction(id: String, items: List<SplitItemRequest>) {
@@ -375,6 +408,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 val rulesRes = api.getRules()
                 val tagsRes = api.getTags()
                 val compRes = api.getMonthlyComparison(ym.year, ym.monthValue)
+                val forecastRes = api.getForecast(ym.year, ym.monthValue)
+                val prefsRes = api.getPreferences()
 
                 if (summaryRes.code() == 401 || txRes.code() == 401) {
                     logout()
@@ -397,6 +432,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                             isLoading = false,
                             monthlySpending = summaryBody,
                             comparison = if (compRes.isSuccessful) compRes.body() else it.comparison,
+                            forecast = if (forecastRes.isSuccessful) forecastRes.body() else it.forecast,
+                            preferences = if (prefsRes.isSuccessful) prefsRes.body() else it.preferences,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
                             transactions = txRes.body().orEmpty(),
                             wallets = if (walletsRes.isSuccessful) walletsRes.body().orEmpty() else it.wallets,
@@ -768,11 +805,11 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun upsertBudget(categoryName: String, monthlyLimit: String) {
+    fun upsertBudget(categoryName: String, monthlyLimit: String, rollover: Boolean = false) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
-                val res = api.upsertBudget(UpsertBudgetRequest(categoryName, monthlyLimit.trim()))
+                val res = api.upsertBudget(UpsertBudgetRequest(categoryName, monthlyLimit.trim(), rollover))
                 if (res.isSuccessful) {
                     _uiState.update { it.copy(isLoading = false, statusMessage = "Budget saved for $categoryName") }
                     refreshDashboard()

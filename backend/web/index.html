@@ -71,6 +71,12 @@
     <main class="container">
       <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
+      <!-- Active Travel / Event Mode Banner (#6) -->
+      <div id="event-banner" class="event-banner hidden">
+        <span id="event-banner-text">✈ Travel / Event Mode active</span>
+        <button id="btn-end-event" class="btn btn-ghost btn-sm" type="button">End Trip</button>
+      </div>
+
       <!-- Pending Drafts Banner -->
       <div id="pending-banner" class="pending-banner hidden">
         <span id="pending-banner-text">You have unreviewed draft transactions.</span>
@@ -252,6 +258,26 @@
 
       <!-- TAB: PLANNING -->
       <div data-tab-panel="planning" class="hidden">
+      <!-- Forecast, Net Worth Line Chart & Smart Alerts (#2, #4, #5) -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Forecast, Net Worth &amp; Alerts</h2>
+          <span id="forecast-badge" class="badge-subtle mono">Projected End: —</span>
+        </div>
+        <div class="mom-grid" style="margin-bottom:14px;">
+          <div>
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:6px;">NET WORTH TRAJECTORY (6M)</div>
+            <div id="networth-chart" class="nw-chart-wrap"></div>
+          </div>
+          <div>
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:6px;">ANOMALIES &amp; PRICE HIKES</div>
+            <div id="alerts-list" style="display:flex;flex-direction:column;gap:8px;">
+              <div class="empty-block">No unusual charges or subscription price hikes detected.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Monthly Highlights: Savings Rate, No-Spend Streak, MoM & Top Merchants (#2 & #3) -->
       <section class="card" style="margin-bottom:20px;">
         <div class="section-head">
@@ -303,6 +329,9 @@
           <form id="budget-form" class="budget-form">
             <select id="budget-category" aria-label="Budget category"></select>
             <input id="budget-limit" class="mono" type="number" step="1000" min="1" required placeholder="Monthly limit" />
+            <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;white-space:nowrap;cursor:pointer;">
+              <input id="budget-rollover" type="checkbox" style="width:auto;" /> Rollover
+            </label>
             <button class="btn btn-ghost btn-sm" type="submit">Set</button>
           </form>
           <div style="margin-top:10px;display:flex;justify-content:flex-end;">
@@ -380,6 +409,37 @@
 
       <!-- TAB: TOOLS -->
       <div data-tab-panel="tools" class="hidden">
+      <!-- Payday Cycle & Travel / Event Mode (#6 & #7) -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Payday Cycle &amp; Travel / Event Mode</h2>
+          <span class="badge-subtle">Synced across Web &amp; Android</span>
+        </div>
+        <form id="prefs-form" class="inline-form-4">
+          <div class="field" style="margin:0;">
+            <label for="pref-cycle-day">Payday Start Day (1–28)</label>
+            <input id="pref-cycle-day" class="mono" type="number" min="1" max="28" value="1" />
+          </div>
+          <div class="field" style="margin:0;">
+            <label for="pref-event-tag">Active Trip / Event Tag</label>
+            <input id="pref-event-tag" type="text" placeholder="e.g. dalat-trip (empty = off)" />
+          </div>
+          <div class="field" style="margin:0;">
+            <label for="pref-event-currency">Event Currency</label>
+            <select id="pref-event-currency">
+              <option value="">Default</option>
+              <option value="VND">VND</option>
+              <option value="USD">USD</option>
+              <option value="JPY">JPY</option>
+              <option value="THB">THB</option>
+              <option value="EUR">EUR</option>
+              <option value="SGD">SGD</option>
+            </select>
+          </div>
+          <button class="btn btn-primary btn-sm" type="submit" style="align-self:end;">Save Settings</button>
+        </form>
+      </section>
+
       <!-- Merchant Rules & JSON Backup Row -->
       <div class="grid-main">
         <section class="card">
@@ -528,8 +588,8 @@
         </div>
         <div class="upload-controls">
           <div class="field">
-            <label for="add-amount">Amount</label>
-            <input id="add-amount" class="mono" type="number" step="0.01" min="0.01" required placeholder="50000" />
+            <label for="add-amount">Amount <span id="add-amount-preview" class="muted mono" style="font-size:0.78rem;"></span></label>
+            <input id="add-amount" class="mono" type="text" inputmode="decimal" required placeholder="50000 or 35000+15000" />
           </div>
           <div class="field">
             <label for="add-currency">Currency</label>

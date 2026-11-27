@@ -160,6 +160,14 @@ pub fn build_router(state: AppState) -> Router {
             get(extras::monthly_comparison),
         )
         .route(
+            "/api/v1/spending/forecast",
+            get(extras::spending_forecast),
+        )
+        .route(
+            "/api/v1/preferences",
+            get(extras::get_preferences).put(extras::update_preferences),
+        )
+        .route(
             "/api/v1/transactions/bulk",
             post(extras::bulk_transactions),
         )

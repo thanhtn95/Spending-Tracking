@@ -336,6 +336,7 @@ pub struct UpsertBudgetRequest {
     pub category_name: String,
     pub monthly_limit: Decimal,
     pub currency: Option<String>,
+    pub rollover: Option<bool>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -355,8 +356,10 @@ pub struct BudgetRecord {
     pub category_id: Uuid,
     pub category_name: String,
     pub monthly_limit: Decimal,
+    pub effective_limit: Decimal,
     pub spent: Decimal,
     pub currency: String,
+    pub rollover: bool,
 }
 
 // --- Wallets & Internal Transfers ---
@@ -649,4 +652,52 @@ pub struct BulkTransactionsRequest {
 #[derive(Debug, Serialize)]
 pub struct BulkTransactionsResponse {
     pub affected_count: usize,
+}
+
+// --- User Preferences (Payday Cycle & Travel/Event Mode), Forecast, Net Worth & Anomalies ---
+
+#[derive(Debug, Serialize)]
+pub struct UserPreferencesResponse {
+    pub cycle_start_day: i16,
+    pub active_event_tag: Option<String>,
+    pub active_event_currency: Option<String>,
+    pub active_event_spent: Decimal,
+    pub base_currency: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdatePreferencesRequest {
+    pub cycle_start_day: Option<i16>,
+    pub active_event_tag: Option<String>,
+    pub active_event_currency: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct NetWorthPoint {
+    pub year: i32,
+    pub month: u32,
+    pub net_worth: Decimal,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpendingAlertItem {
+    pub kind: String, // "price_hike" or "anomaly"
+    pub title: String,
+    pub detail: String,
+    pub amount: Decimal,
+    pub currency: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ForecastAndHealthResponse {
+    pub year: i32,
+    pub month: u32,
+    pub base_currency: String,
+    pub current_running_balance: Decimal,
+    pub upcoming_recurring_total: Decimal,
+    pub daily_burn_rate: Decimal,
+    pub remaining_days: i64,
+    pub projected_month_end_balance: Decimal,
+    pub net_worth_points: Vec<NetWorthPoint>,
+    pub alerts: Vec<SpendingAlertItem>,
 }

@@ -312,6 +312,38 @@ body.privacy-mode .badge-subtle.mono {
   font-size: 0.84rem;
 }
 
+/* Event Mode Banner, Forecast, Net Worth Chart & Alerts */
+.event-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-soft-text);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+.alert-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  border: 1px solid var(--warn);
+  font-size: 0.84rem;
+}
+.nw-chart-wrap {
+  width: 100%;
+  overflow-x: auto;
+  padding-top: 6px;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {

@@ -210,4 +210,19 @@ interface SpendingApiService {
     suspend fun bulkTransactions(
         @Body request: BulkTransactionsRequest
     ): Response<BulkTransactionsResponse>
+
+    // Forecast, Net Worth, Anomalies & User Preferences (Payday Cycle + Travel Mode)
+    @GET("api/v1/spending/forecast")
+    suspend fun getForecast(
+        @Query("year") year: Int,
+        @Query("month") month: Int
+    ): Response<ForecastAndHealthResponse>
+
+    @GET("api/v1/preferences")
+    suspend fun getPreferences(): Response<UserPreferencesResponse>
+
+    @PUT("api/v1/preferences")
+    suspend fun updatePreferences(
+        @Body request: UpdatePreferencesRequest
+    ): Response<UserPreferencesResponse>
 }

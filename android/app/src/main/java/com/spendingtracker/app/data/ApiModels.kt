@@ -254,13 +254,16 @@ data class BudgetRecord(
     @SerializedName("category_id") val categoryId: String,
     @SerializedName("category_name") val categoryName: String,
     @SerializedName("monthly_limit") val monthlyLimit: String,
+    @SerializedName("effective_limit") val effectiveLimit: String? = null,
     val spent: String,
-    val currency: String
+    val currency: String,
+    val rollover: Boolean = false
 )
 
 data class UpsertBudgetRequest(
     @SerializedName("category_name") val categoryName: String,
-    @SerializedName("monthly_limit") val monthlyLimit: String
+    @SerializedName("monthly_limit") val monthlyLimit: String,
+    val rollover: Boolean = false
 )
 
 // --- Wallets, Quick Templates, Rules, Tags/Range, Backup ---
@@ -408,6 +411,47 @@ data class BulkTransactionsRequest(
 
 data class BulkTransactionsResponse(
     @SerializedName("affected_count") val affectedCount: Int
+)
+
+data class UserPreferencesResponse(
+    @SerializedName("cycle_start_day") val cycleStartDay: Int = 1,
+    @SerializedName("active_event_tag") val activeEventTag: String? = null,
+    @SerializedName("active_event_currency") val activeEventCurrency: String? = null,
+    @SerializedName("active_event_spent") val activeEventSpent: String = "0",
+    @SerializedName("base_currency") val baseCurrency: String = "VND"
+)
+
+data class UpdatePreferencesRequest(
+    @SerializedName("cycle_start_day") val cycleStartDay: Int? = null,
+    @SerializedName("active_event_tag") val activeEventTag: String? = null,
+    @SerializedName("active_event_currency") val activeEventCurrency: String? = null
+)
+
+data class NetWorthPoint(
+    val year: Int,
+    val month: Int,
+    @SerializedName("net_worth") val netWorth: String
+)
+
+data class SpendingAlertItem(
+    val kind: String,
+    val title: String,
+    val detail: String,
+    val amount: String,
+    val currency: String
+)
+
+data class ForecastAndHealthResponse(
+    val year: Int,
+    val month: Int,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("current_running_balance") val currentRunningBalance: String = "0",
+    @SerializedName("upcoming_recurring_total") val upcomingRecurringTotal: String = "0",
+    @SerializedName("daily_burn_rate") val dailyBurnRate: String = "0",
+    @SerializedName("remaining_days") val remainingDays: Long = 0,
+    @SerializedName("projected_month_end_balance") val projectedMonthEndBalance: String = "0",
+    @SerializedName("net_worth_points") val netWorthPoints: List<NetWorthPoint> = emptyList(),
+    val alerts: List<SpendingAlertItem> = emptyList()
 )
 
 // --- Error ---

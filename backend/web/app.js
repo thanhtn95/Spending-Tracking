@@ -48,6 +48,7 @@
     templates: [],
     rules: [],
     tags: [],
+    prefs: { cycle_start_day: 1, active_event_tag: null, active_event_currency: null, active_event_spent: "0" },
     selectedTxIds: new Set(),
     rangeMode: false,
     rangeStart: null,
@@ -230,7 +231,78 @@
   const btnBulkApply = document.getElementById("btn-bulk-apply");
   const btnBulkDelete = document.getElementById("btn-bulk-delete");
   const btnBulkClear = document.getElementById("btn-bulk-clear");
+  const eventBanner = document.getElementById("event-banner");
+  const eventBannerText = document.getElementById("event-banner-text");
+  const btnEndEvent = document.getElementById("btn-end-event");
+  const forecastBadge = document.getElementById("forecast-badge");
+  const netWorthChartEl = document.getElementById("networth-chart");
+  const alertsListEl = document.getElementById("alerts-list");
+  const budgetRolloverEl = document.getElementById("budget-rollover");
+  const prefsForm = document.getElementById("prefs-form");
+  const prefCycleDayEl = document.getElementById("pref-cycle-day");
+  const prefEventTagEl = document.getElementById("pref-event-tag");
+  const prefEventCurEl = document.getElementById("pref-event-currency");
+  const addAmountPreviewEl = document.getElementById("add-amount-preview");
   let splittingTx = null;
+
+  // Safe inline arithmetic evaluator (#1: e.g. "35000+15000", "240000/3", "100k*2")
+  function evalMathAmount(raw) {
+    const cleaned = String(raw || "")
+      .replace(/,/g, "")
+      .replace(/(\d+(?:\.\d+)?)k/gi, (_, n) => String(Number(n) * 1000))
+      .replace(/(\d+(?:\.\d+)?)(?:m|tr)/gi, (_, n) => String(Number(n) * 1000000))
+      .replace(/×/g, "*")
+      .replace(/÷/g, "/")
+      .replace(/\s+/g, "");
+    if (!cleaned || !/^[0-9.+\-*/()]+$/.test(cleaned)) return null;
+    try {
+      // Shunting-yard safe evaluator (no eval/Function)
+      const tokens = cleaned.match(/\d+(?:\.\d+)?|[+\-*/()]/g);
+      if (!tokens) return null;
+      const vals = [];
+      const ops = [];
+      const prec = { "+": 1, "-": 1, "*": 2, "/": 2 };
+      const applyOp = () => {
+        const op = ops.pop();
+        const b = vals.pop();
+        const a = vals.pop();
+        if (a === undefined || b === undefined) throw new Error("bad");
+        if (op === "+") vals.push(a + b);
+        else if (op === "-") vals.push(a - b);
+        else if (op === "*") vals.push(a * b);
+        else if (op === "/") vals.push(b === 0 ? NaN : a / b);
+      };
+      for (const tok of tokens) {
+        if (/^\d/.test(tok)) vals.push(Number(tok));
+        else if (tok === "(") ops.push(tok);
+        else if (tok === ")") {
+          while (ops.length && ops[ops.length - 1] !== "(") applyOp();
+          ops.pop();
+        } else {
+          while (ops.length && prec[ops[ops.length - 1]] >= prec[tok]) applyOp();
+          ops.push(tok);
+        }
+      }
+      while (ops.length) applyOp();
+      const res = vals[0];
+      if (!Number.isFinite(res) || res <= 0) return null;
+      return Math.round(res * 100) / 100;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  if (addAmountEl && addAmountPreviewEl) {
+    addAmountEl.addEventListener("input", () => {
+      const val = addAmountEl.value.trim();
+      if (/[+\-*/kKmM]/.test(val)) {
+        const res = evalMathAmount(val);
+        addAmountPreviewEl.textContent = res ? `= ${formatNumber(res)}` : "";
+      } else {
+        addAmountPreviewEl.textContent = "";
+      }
+    });
+  }
   const addForm = document.getElementById("add-form");
   const addTypeEl = document.getElementById("add-type");
   const addDateEl = document.getElementById("add-date");
@@ -521,7 +593,7 @@
       ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
       : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
     try {
-      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison] = await Promise.all([
+      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs] = await Promise.all([
         apiFetch(`/api/v1/spending/monthly?${q}`),
         apiFetch(txUrl),
         apiFetch(`/api/v1/spending/trend?months=6`),
@@ -534,15 +606,20 @@
         apiFetch(`/api/v1/rules`),
         apiFetch(`/api/v1/tags`),
         apiFetch(`/api/v1/spending/comparison?${q}`),
+        apiFetch(`/api/v1/spending/forecast?${q}`),
+        apiFetch(`/api/v1/preferences`),
       ]);
       state.baseCurrency = summary?.base_currency || "VND";
       state.wallets = wallets || [];
       state.templates = templates || [];
       state.rules = rules || [];
       state.tags = tags || [];
+      if (prefs) state.prefs = prefs;
       state.selectedTxIds.clear();
       syncBulkBar();
       renderSummary(summary);
+      renderPreferences(state.prefs);
+      renderForecast(forecast);
       renderComparison(comparison);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
@@ -1290,6 +1367,108 @@
     }
   });
 
+  // --- Preferences (Payday Cycle & Travel/Event Mode) (#6 & #7) ---
+  function renderPreferences(p) {
+    if (!p) return;
+    if (prefCycleDayEl) prefCycleDayEl.value = p.cycle_start_day || 1;
+    if (prefEventTagEl) prefEventTagEl.value = p.active_event_tag || "";
+    if (prefEventCurEl) prefEventCurEl.value = p.active_event_currency || "";
+    if (eventBanner && eventBannerText) {
+      if (p.active_event_tag) {
+        const curHint = p.active_event_currency ? ` (${p.active_event_currency})` : "";
+        eventBannerText.textContent = `✈ Active Trip/Event: #${p.active_event_tag}${curHint} · Spent: ${formatNumber(p.active_event_spent || 0)} ${p.base_currency}`;
+        eventBanner.classList.remove("hidden");
+      } else {
+        eventBanner.classList.add("hidden");
+      }
+    }
+  }
+
+  if (prefsForm) {
+    prefsForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const res = await apiFetch("/api/v1/preferences", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cycle_start_day: Number(prefCycleDayEl.value) || 1,
+            active_event_tag: prefEventTagEl.value.trim(),
+            active_event_currency: prefEventCurEl.value,
+          }),
+        });
+        state.prefs = res;
+        showToast("Preferences saved.");
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+
+  if (btnEndEvent) {
+    btnEndEvent.addEventListener("click", async () => {
+      await apiFetch("/api/v1/preferences", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active_event_tag: "", active_event_currency: "" }),
+      });
+      showToast("Travel / Event Mode ended.");
+      await refreshDashboard();
+    });
+  }
+
+  // --- Forecast, Net Worth Line Chart & Smart Alerts (#2, #4, #5) ---
+  function renderForecast(f) {
+    if (!f) return;
+    if (forecastBadge) {
+      const proj = Number(f.projected_month_end_balance || 0);
+      forecastBadge.textContent = `Projected End: ${proj > 0 ? "+" : ""}${formatNumber(proj)} ${f.base_currency}`;
+    }
+    if (netWorthChartEl) {
+      const pts = f.net_worth_points || [];
+      if (pts.length < 2) {
+        netWorthChartEl.innerHTML = `<div class="empty-block">Not enough history for net worth chart yet.</div>`;
+      } else {
+        const vals = pts.map((p) => Number(p.net_worth || 0));
+        const minV = Math.min(...vals);
+        const maxV = Math.max(...vals);
+        const span = Math.max(1, maxV - minV);
+        const w = 340, h = 110, padX = 20, padY = 16;
+        const coords = vals.map((v, i) => {
+          const x = padX + (i / (vals.length - 1)) * (w - padX * 2);
+          const y = h - padY - ((v - minV) / span) * (h - padY * 2);
+          return [x, y, pts[i]];
+        });
+        const poly = coords.map((c) => `${c[0].toFixed(1)},${c[1].toFixed(1)}`).join(" ");
+        const dots = coords.map((c) => {
+          const lbl = new Date(c[2].year, c[2].month - 1, 1).toLocaleDateString(undefined, { month: "short" });
+          return `<circle cx="${c[0].toFixed(1)}" cy="${c[1].toFixed(1)}" r="4" fill="var(--accent)"><title>${lbl}: ${formatNumber(c[2].net_worth)}</title></circle>
+                  <text x="${c[0].toFixed(1)}" y="${h - 2}" text-anchor="middle" font-size="10" fill="var(--muted)">${lbl}</text>`;
+        }).join("");
+        netWorthChartEl.innerHTML = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:110px;display:block;">
+          <polyline fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${poly}" />
+          ${dots}
+        </svg>`;
+      }
+    }
+    if (alertsListEl) {
+      const alerts = f.alerts || [];
+      if (!alerts.length) {
+        alertsListEl.innerHTML = `<div class="empty-block">No unusual charges or subscription price hikes detected.</div>`;
+      } else {
+        alertsListEl.innerHTML = alerts.map((a) => `
+          <div class="alert-item">
+            <div>
+              <strong>${escapeHtml(a.title)}</strong>
+              <div class="muted" style="font-size:0.78rem;">${escapeHtml(a.detail)}</div>
+            </div>
+            <span class="pill pill-warn">${a.kind === "price_hike" ? "Price Hike" : "Anomaly"}</span>
+          </div>`).join("");
+      }
+    }
+  }
+
   // --- MoM Comparison, Top Merchants, Savings Rate & No-Spend Streak (#2 & #3) ---
   function renderComparison(comp) {
     if (!comp) return;
@@ -1496,21 +1675,22 @@
     }
 
     budgetListEl.innerHTML = budgets.map((b) => {
-      const limit = Number(b.monthly_limit || 1);
+      const limit = Number(b.effective_limit ?? b.monthly_limit ?? 1);
       const spent = Number(b.spent || 0);
-      const pct = Math.round((spent / limit) * 100);
+      const pct = limit > 0 ? Math.round((spent / limit) * 100) : 100;
       const barPct = Math.min(100, pct);
       const barColor = pct >= 100 ? "var(--danger)" : (pct >= 75 ? "var(--warn)" : "var(--accent)");
       const remaining = limit - spent;
       const statusText = remaining >= 0
         ? `${formatNumber(remaining)} left`
         : `Over by ${formatNumber(Math.abs(remaining))}`;
+      const rolloverBadge = b.rollover ? `<span class="pill" style="margin-left:6px;">↻ Rollover</span>` : "";
       return `
         <div>
           <div class="cat-row-top">
             <span class="cat-name-wrap">
               <span class="cat-dot" style="background:${barColor}"></span>
-              <span>${escapeHtml(b.category_name)}</span>
+              <span>${escapeHtml(b.category_name)}${rolloverBadge}</span>
             </span>
             <span class="mono" style="font-size:0.84rem;">${formatNumber(spent)} / ${formatNumber(limit)} <span class="muted">(${statusText})</span></span>
           </div>
@@ -1767,6 +1947,7 @@
         body: JSON.stringify({
           category_name: budgetCategoryEl.value,
           monthly_limit: limit,
+          rollover: budgetRolloverEl ? budgetRolloverEl.checked : false,
         }),
       });
       budgetLimitEl.value = "";
@@ -1789,9 +1970,10 @@
     addDateEl.value = new Date().toISOString().slice(0, 10);
     addVendorEl.value = "";
     addAmountEl.value = "";
-    addCurrencyEl.value = state.baseCurrency || "VND";
+    if (addAmountPreviewEl) addAmountPreviewEl.textContent = "";
+    addCurrencyEl.value = state.prefs?.active_event_currency || state.baseCurrency || "VND";
     if (addWalletEl) addWalletEl.value = "";
-    if (addTagsEl) addTagsEl.value = "";
+    if (addTagsEl) addTagsEl.value = state.prefs?.active_event_tag || "";
     addDescEl.value = "";
     addRecurringEl.checked = false;
     addModal.classList.remove("hidden");
@@ -1877,6 +2059,12 @@
     btnSubmitAdd.disabled = true;
     const editId = editTxIdEl.value;
     try {
+      const evalAmt = evalMathAmount(addAmountEl.value);
+      if (!evalAmt) {
+        showToast("Enter a valid positive amount (math like 35000+15000 supported).");
+        btnSubmitAdd.disabled = false;
+        return;
+      }
       const rawTags = addTagsEl ? addTagsEl.value.split(",").map((s) => s.trim()).filter(Boolean) : [];
       const payload = {
         tx_date: addDateEl.value,
@@ -1884,7 +2072,7 @@
         description: addDescEl.value.trim(),
         category_name: addCategoryEl.value,
         wallet_id: (addWalletEl && addWalletEl.value) ? addWalletEl.value : null,
-        amount: addAmountEl.value,
+        amount: String(evalAmt),
         currency: addCurrencyEl.value,
         tx_type: addTypeEl.value,
         is_recurring: addRecurringEl.checked,

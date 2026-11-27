@@ -124,6 +124,8 @@ fun DashboardScreen(
     onLogRecurringClick: (com.spendingtracker.app.data.RecurringBillItem) -> Unit,
     onBulkDeleteClick: (List<String>) -> Unit,
     onBulkCategoryClick: (List<String>, String) -> Unit,
+    onSavePreferences: (Int?, String?, String?) -> Unit,
+    onEndEventClick: () -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -387,6 +389,33 @@ fun DashboardScreen(
                                     color = Color(0xFFB45309),
                                     fontWeight = FontWeight.SemiBold
                                 )
+                            }
+                        }
+                    }
+                }
+
+                // Active Travel / Event Mode Banner (#6)
+                val activeEventTag = state.preferences?.activeEventTag
+                if (!activeEventTag.isNullOrBlank()) {
+                    item {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "✈ #$activeEventTag · ${maskAmt("${formatAmount(state.preferences?.activeEventSpent ?: "0")} $baseCurrency")}",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                TextButton(onClick = onEndEventClick) { Text("End") }
                             }
                         }
                     }
@@ -664,6 +693,15 @@ fun DashboardScreen(
 
                 // 6-Month Cash Flow Trend Chart — Plan tab
                 if (selectedTab == 2) {
+                // End-of-Month Forecast, Net Worth Canvas Line Chart & Anomalies (#2, #4, #5)
+                state.forecast?.let { f ->
+                    item {
+                        ForecastAndNetWorthCard(
+                            forecast = f,
+                            privacyMode = state.privacyMode
+                        )
+                    }
+                }
                 // Monthly Highlights: Savings Rate, No-Spend Streak, MoM & Top Merchants (#2 & #3)
                 state.comparison?.let { comp ->
                     item {
@@ -1195,6 +1233,14 @@ fun DashboardScreen(
                             )
                         }
                     }
+                }
+
+                // Payday Cycle & Travel / Event Mode Settings (#6 & #7) — More tab
+                item {
+                    PreferencesCard(
+                        prefs = state.preferences,
+                        onSave = onSavePreferences
+                    )
                 }
 
                 }
@@ -1832,6 +1878,180 @@ private fun formatDateHeading(isoDate: String): String {
 private fun formatAmount(raw: String): String {
     val num = raw.toBigDecimalOrNull() ?: return raw
     return NumberFormat.getNumberInstance(Locale.getDefault()).format(num)
+}
+
+@Composable
+private fun ForecastAndNetWorthCard(
+    forecast: com.spendingtracker.app.data.ForecastAndHealthResponse,
+    privacyMode: Boolean
+) {
+    val projVal = forecast.projectedMonthEndBalance.toBigDecimalOrNull() ?: BigDecimal.ZERO
+    val projColor = if (projVal < BigDecimal.ZERO) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val accentColor = MaterialTheme.colorScheme.primary
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "FORECAST & NET WORTH",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = if (privacyMode) "••••••" else "End: ${if (projVal > BigDecimal.ZERO) "+" else ""}${formatAmount(forecast.projectedMonthEndBalance)} ${forecast.baseCurrency}",
+                    style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                    fontWeight = FontWeight.SemiBold,
+                    color = projColor
+                )
+            }
+            Text(
+                text = "Burn rate: ${if (privacyMode) "••••" else formatAmount(forecast.dailyBurnRate)}/day · ${forecast.remainingDays}d left · Upcoming bills: ${if (privacyMode) "••••" else formatAmount(forecast.upcomingRecurringTotal)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            // Net Worth Trajectory Line Chart (Compose Canvas)
+            if (forecast.netWorthPoints.size >= 2) {
+                val vals = forecast.netWorthPoints.map { it.netWorth.toFloatOrNull() ?: 0f }
+                val minV = vals.minOrNull() ?: 0f
+                val maxV = vals.maxOrNull() ?: 1f
+                val span = (maxV - minV).coerceAtLeast(1f)
+                androidx.compose.foundation.Canvas(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(86.dp)
+                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                ) {
+                    val stepX = size.width / (vals.size - 1).coerceAtLeast(1)
+                    val path = androidx.compose.ui.graphics.Path()
+                    vals.forEachIndexed { idx, v ->
+                        val x = idx * stepX
+                        val y = size.height - ((v - minV) / span) * size.height
+                        if (idx == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                    }
+                    drawPath(
+                        path = path,
+                        color = accentColor,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 6f)
+                    )
+                    vals.forEachIndexed { idx, v ->
+                        val x = idx * stepX
+                        val y = size.height - ((v - minV) / span) * size.height
+                        drawCircle(color = accentColor, radius = 9f, center = androidx.compose.ui.geometry.Offset(x, y))
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    forecast.netWorthPoints.forEach { pt ->
+                        Text(
+                            text = Month.of(pt.month).getDisplayName(TextStyle.SHORT, Locale.getDefault()),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Anomalies & Subscription Price-Hike Alerts
+            if (forecast.alerts.isNotEmpty()) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                forecast.alerts.forEach { alert ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = alert.title,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = alert.detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreferencesCard(
+    prefs: com.spendingtracker.app.data.UserPreferencesResponse?,
+    onSave: (Int?, String?, String?) -> Unit
+) {
+    var cycleDay by remember(prefs?.cycleStartDay) { mutableStateOf((prefs?.cycleStartDay ?: 1).toString()) }
+    var eventTag by remember(prefs?.activeEventTag) { mutableStateOf(prefs?.activeEventTag.orEmpty()) }
+    var eventCur by remember(prefs?.activeEventCurrency) { mutableStateOf(prefs?.activeEventCurrency.orEmpty()) }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "PAYDAY CYCLE & TRAVEL MODE",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = cycleDay,
+                    onValueChange = { cycleDay = it.filter { ch -> ch.isDigit() }.take(2) },
+                    label = { Text("Payday (1-28)") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = eventCur,
+                    onValueChange = { eventCur = it.uppercase().take(3) },
+                    label = { Text("Trip Curr") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            OutlinedTextField(
+                value = eventTag,
+                onValueChange = { eventTag = it },
+                label = { Text("Active Trip/Event Tag (e.g. dalat-trip)") },
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextButton(
+                onClick = {
+                    val d = cycleDay.toIntOrNull()?.coerceIn(1, 28) ?: 1
+                    onSave(d, eventTag.trim(), eventCur.trim())
+                }
+            ) {
+                Text("Save Payday & Travel Settings")
+            }
+        }
+    }
 }
 
 @Composable

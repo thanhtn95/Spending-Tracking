@@ -113,6 +113,11 @@ interface SpendingApiService {
         @Query("month") month: Int
     ): Response<MonthlyInsightsResponse>
 
+    @POST("api/v1/insights/ask")
+    suspend fun askLedger(
+        @Body request: AskLedgerRequest
+    ): Response<AskLedgerResponse>
+
     @GET("api/v1/goals")
     suspend fun getGoals(): Response<List<GoalRecord>>
 

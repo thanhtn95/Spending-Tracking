@@ -97,6 +97,10 @@ pub fn build_router(state: AppState) -> Router {
             get(insights::monthly_insights),
         )
         .route(
+            "/api/v1/insights/ask",
+            post(insights::ask_ledger),
+        )
+        .route(
             "/api/v1/goals",
             get(insights::list_goals).post(insights::create_goal),
         )

@@ -12,8 +12,8 @@ use crate::{
         GlobalSearchResponse, ListTransactionsQuery, MerchantMonthPoint, MerchantProfileQuery,
         MerchantProfileResponse, MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery,
         NetWorthPoint, PaceComparison, QuickTemplateRecord, RangeSpendingQuery,
-        RangeSpendingResponse, Rule503020Response, SpendingAlertItem, SplitTransactionRequest,
-        SubscriptionAuditItem, SubscriptionAuditResponse, TagSpending, TopMerchantItem,
+        RangeSpendingResponse, Rule503020Response, SpendingAlertItem, SpendingChallenge,
+        SplitTransactionRequest, SubscriptionAuditItem, SubscriptionAuditResponse, TagSpending, TopMerchantItem,
         TransactionRecord, TransferWalletRequest, TransferWalletResponse, TrendQuery,
         UpdatePreferencesRequest, UpsertMerchantRuleRequest, UserPreferencesResponse,
         WalletRecord, WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem,
@@ -3348,6 +3348,66 @@ pub async fn dashboard_analytics(
         target_months: 6.0,
     };
 
+    // v2.1.0: Monthly Spending Challenges & Streaks (0 extra tables)
+    let no_spend_target = 10i64;
+    let no_spend_pct = ((comparison.no_spend_days as f64 / no_spend_target as f64) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as i32;
+    let ok_budgets = budgets.iter().filter(|b| b.spent <= b.effective_limit).count();
+    let budget_chal_pct = if budgets.is_empty() {
+        0
+    } else {
+        ((ok_budgets as f64 / budgets.len() as f64) * 100.0).round() as i32
+    };
+    let sav_rate = comparison.savings_rate_pct.unwrap_or(0.0);
+    let sav_chal_pct = ((sav_rate / 20.0) * 100.0).round().clamp(0.0, 100.0) as i32;
+    let wants_ok = rule_50_30_20.total_spent > Decimal::ZERO && rule_50_30_20.wants_pct <= 30.0;
+    let wants_pct = if rule_50_30_20.total_spent <= Decimal::ZERO {
+        0
+    } else if wants_ok {
+        100
+    } else {
+        ((30.0 / rule_50_30_20.wants_pct.max(1.0)) * 100.0).round().clamp(0.0, 100.0) as i32
+    };
+
+    let challenges = vec![
+        SpendingChallenge {
+            id: "no_spend_10".to_string(),
+            title: "10 No-Spend Days".to_string(),
+            detail: format!(
+                "{}/{} days · current streak: {}d",
+                comparison.no_spend_days, no_spend_target, comparison.current_no_spend_streak
+            ),
+            progress_pct: no_spend_pct,
+            completed: comparison.no_spend_days >= no_spend_target,
+        },
+        SpendingChallenge {
+            id: "under_budget".to_string(),
+            title: "All Categories Under Budget".to_string(),
+            detail: if budgets.is_empty() {
+                "Set at least 1 budget to track".to_string()
+            } else {
+                format!("{}/{} categories on track", ok_budgets, budgets.len())
+            },
+            progress_pct: budget_chal_pct,
+            completed: !budgets.is_empty() && ok_budgets == budgets.len(),
+        },
+        SpendingChallenge {
+            id: "savings_20".to_string(),
+            title: "20% Savings Rate".to_string(),
+            detail: format!("Current: {:.1}% (target 20%)", sav_rate),
+            progress_pct: sav_chal_pct,
+            completed: sav_rate >= 20.0,
+        },
+        SpendingChallenge {
+            id: "wants_30".to_string(),
+            title: "Keep Wants ≤ 30%".to_string(),
+            detail: format!("Current Wants: {:.1}%", rule_50_30_20.wants_pct),
+            progress_pct: wants_pct,
+            completed: wants_ok,
+        },
+    ];
+
     Ok(Json(DashboardAnalyticsResponse {
         trend,
         recurring,
@@ -3365,6 +3425,7 @@ pub async fn dashboard_analytics(
         subscription_audit,
         health_score,
         emergency_runway,
+        challenges,
     }))
 }
 

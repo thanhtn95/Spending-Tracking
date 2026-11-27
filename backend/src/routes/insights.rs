@@ -1,8 +1,8 @@
 use crate::{
     error::AppError,
     models::{
-        CreateGoalRequest, CreateIouRequest, GoalRecord, IouRecord, MonthlyInsightsResponse,
-        MonthlyQuery, UpdateGoalRequest,
+        AskLedgerRequest, AskLedgerResponse, CreateGoalRequest, CreateIouRequest, GoalRecord,
+        IouRecord, MonthlyInsightsResponse, MonthlyQuery, UpdateGoalRequest,
     },
     routes::AppState,
     services::auth::AuthUser,
@@ -133,6 +133,122 @@ pub async fn monthly_insights(
         month: params.month,
         model_used,
         tips,
+    }))
+}
+
+// --- v2.1.0: "Ask Your Ledger" AI Q&A (1 free Flash-Lite call with compact pre-aggregated stats) ---
+
+pub async fn ask_ledger(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<AskLedgerRequest>,
+) -> Result<Json<AskLedgerResponse>, AppError> {
+    let question = payload.question.trim().to_string();
+    if question.is_empty() || question.len() > 300 {
+        return Err(AppError::BadRequest(
+            "question must be between 1 and 300 characters".to_string(),
+        ));
+    }
+    let today = chrono::Utc::now().date_naive();
+    let year = payload.year.unwrap_or_else(|| chrono::Datelike::year(&today));
+    let month = payload.month.unwrap_or_else(|| chrono::Datelike::month(&today));
+    let start = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year/month".to_string()))?;
+    let (ny, nm) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let end = NaiveDate::from_ymd_opt(ny, nm, 1).unwrap();
+
+    let (cur_spent, cur_credit): (Decimal, Decimal) = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN tx_type = 'debit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0)
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_date >= $2 AND tx_date < $3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_one(&state.db)
+    .await?;
+
+    let running_balance: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE -COALESCE(base_amount, amount) END), 0)
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE AND tx_date < $2
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(end)
+    .fetch_one(&state.db)
+    .await?;
+
+    let top_cats: Vec<(String, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(c.name, 'Uncategorized'), COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0)
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1 AND t.status = 'confirmed' AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit' AND t.tx_date >= $2 AND t.tx_date < $3
+        GROUP BY c.name
+        ORDER BY 2 DESC
+        LIMIT 8
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let top_merchants: Vec<(String, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT vendor, COALESCE(SUM(COALESCE(base_amount, amount)), 0), COUNT(*)
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_type = 'debit' AND tx_date >= $2 AND tx_date < $3
+        GROUP BY vendor
+        ORDER BY 2 DESC
+        LIMIT 8
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start)
+    .bind(end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let cats_str = top_cats
+        .iter()
+        .map(|(n, v)| format!("{n}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let merch_str = top_merchants
+        .iter()
+        .map(|(v, amt, cnt)| format!("{v} ({cnt}x): {amt}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let currency = &state.config.default_currency;
+
+    let prompt = format!(
+        "You are a helpful, concise personal finance assistant answering a user's question based ONLY on their summary data.\n\
+         Month: {year}-{month:02} (Currency: {currency}).\n\
+         Month spent: {cur_spent}, Month income: {cur_credit}, Running balance: {running_balance}.\n\
+         Top categories: {cats_str}.\n\
+         Top merchants: {merch_str}.\n\
+         User question: \"{question}\"\n\
+         Reply in 1 to 3 concise, direct sentences with concrete numbers from the data."
+    );
+
+    let (lines, model_used) = state.gemini.generate_text_insights(&prompt).await?;
+    let answer = lines.join(" ");
+
+    Ok(Json(AskLedgerResponse {
+        question,
+        answer,
+        model_used,
     }))
 }
 

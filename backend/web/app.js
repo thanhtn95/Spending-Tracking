@@ -292,17 +292,6 @@
     }
   }
 
-  if (addAmountEl && addAmountPreviewEl) {
-    addAmountEl.addEventListener("input", () => {
-      const val = addAmountEl.value.trim();
-      if (/[+\-*/kKmM]/.test(val)) {
-        const res = evalMathAmount(val);
-        addAmountPreviewEl.textContent = res ? `= ${formatNumber(res)}` : "";
-      } else {
-        addAmountPreviewEl.textContent = "";
-      }
-    });
-  }
   const addForm = document.getElementById("add-form");
   const addTypeEl = document.getElementById("add-type");
   const addDateEl = document.getElementById("add-date");
@@ -315,6 +304,18 @@
   const addDescEl = document.getElementById("add-desc");
   const addRecurringEl = document.getElementById("add-recurring");
   const btnSubmitAdd = document.getElementById("btn-submit-add");
+
+  if (addAmountEl && addAmountPreviewEl) {
+    addAmountEl.addEventListener("input", () => {
+      const val = addAmountEl.value.trim();
+      if (/[+\-*/kKmM]/.test(val)) {
+        const res = evalMathAmount(val);
+        addAmountPreviewEl.textContent = res ? `= ${formatNumber(res)}` : "";
+      } else {
+        addAmountPreviewEl.textContent = "";
+      }
+    });
+  }
 
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("file-input");
@@ -641,6 +642,7 @@
           }
           renderHealthScore(an.health_score);
           renderEmergencyRunway(an.emergency_runway);
+          renderChallenges(an.challenges || []);
           renderForecast(an.forecast);
           renderWeekday(an.weekday);
           renderComparison(an.comparison);
@@ -2132,6 +2134,51 @@
     });
   }
 
+  // --- v2.1.0: Monthly Spending Challenges & Ask Your Ledger AI Q&A ---
+  function renderChallenges(list) {
+    const el = document.getElementById("challenges-list");
+    if (!el) return;
+    if (!list || !list.length) {
+      el.innerHTML = `<div class="empty-block">No challenges tracked yet.</div>`;
+      return;
+    }
+    el.innerHTML = list.map((ch) => `
+      <div class="recurring-card">
+        <div class="recurring-top">
+          <span>${ch.completed ? "✓ " : ""}${escapeHtml(ch.title)}</span>
+          <span class="mono" style="color:${ch.completed ? "var(--accent)" : "var(--muted)"};">${ch.progress_pct}%</span>
+        </div>
+        <div class="cat-bar-track" style="margin:6px 0;"><div class="cat-bar-fill" style="width:${ch.progress_pct}%;background:${ch.completed ? "var(--accent)" : "var(--warn)"};"></div></div>
+        <div class="muted" style="font-size:0.76rem;">${escapeHtml(ch.detail)}</div>
+      </div>`).join("");
+  }
+
+  const askLedgerForm = document.getElementById("ask-ledger-form");
+  const askLedgerInput = document.getElementById("ask-ledger-input");
+  const askLedgerAnswer = document.getElementById("ask-ledger-answer");
+  const btnAskLedger = document.getElementById("btn-ask-ledger");
+  if (askLedgerForm && askLedgerInput && askLedgerAnswer) {
+    askLedgerForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const q = askLedgerInput.value.trim();
+      if (!q) return;
+      if (btnAskLedger) { btnAskLedger.disabled = true; btnAskLedger.textContent = "Thinking..."; }
+      try {
+        const res = await apiFetch("/api/v1/insights/ask", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: q, year: state.year, month: state.month }),
+        });
+        askLedgerAnswer.classList.remove("hidden");
+        askLedgerAnswer.innerHTML = `<div class="insight-item"><strong>Q:</strong> ${escapeHtml(res.question)}<br/><strong>A:</strong> ${escapeHtml(res.answer)}</div>`;
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        if (btnAskLedger) { btnAskLedger.disabled = false; btnAskLedger.textContent = "Ask"; }
+      }
+    });
+  }
+
   // --- Bulk Selection & Actions (#4) ---
   function syncBulkBar() {
     if (!bulkBar) return;
@@ -2369,12 +2416,27 @@
     }
 
     const cats = summary?.by_category || [];
+    const donutEl = document.getElementById("category-donut");
     if (!cats.length) {
+      if (donutEl) donutEl.innerHTML = "";
       categoryListEl.innerHTML = `<div class="empty-block">No confirmed spending for this month yet.</div>`;
       return;
     }
 
     const total = totalSpent || 1;
+    if (donutEl) {
+      const r = 48, cx = 60, cy = 60, circ = 2 * Math.PI * r;
+      let offset = 0;
+      const segs = cats.slice(0, 7).map((c) => {
+        const frac = Math.max(0, Number(c.total_spent || 0) / total);
+        const len = frac * circ;
+        const color = categoryColor(c.category_name);
+        const seg = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${color}" stroke-width="18" stroke-dasharray="${len.toFixed(2)} ${(circ - len).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"><title>${escapeHtml(c.category_name)}: ${formatNumber(c.total_spent)} (${Math.round(frac * 100)}%)</title></circle>`;
+        offset += len;
+        return seg;
+      }).join("");
+      donutEl.innerHTML = `<svg width="120" height="120" viewBox="0 0 120 120">${segs}<text x="60" y="57" text-anchor="middle" font-size="11" fill="var(--muted)">Spent</text><text x="60" y="72" text-anchor="middle" font-size="11" font-weight="700" fill="var(--text)">${cats.length} cats</text></svg>`;
+    }
     categoryListEl.innerHTML = cats.map((c) => {
       const pct = Math.min(100, Math.round((Number(c.total_spent) / total) * 100));
       const color = categoryColor(c.category_name);

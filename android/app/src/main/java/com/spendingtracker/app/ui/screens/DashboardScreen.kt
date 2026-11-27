@@ -153,6 +153,7 @@ fun DashboardScreen(
     onSelectCategoryHistory: (String) -> Unit,
     onLogBillSplit: (String, String, String, Int) -> Unit,
     onExportCsvClick: () -> Unit,
+    onAskLedgerClick: (String) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -1149,8 +1150,59 @@ fun DashboardScreen(
                     }
                 }
 
-                // AI Monthly Spending Coach
+                // AI Monthly Spending Coach + v2.1.0 Ask Your Ledger & Challenges
+                if (state.challenges.isNotEmpty()) {
+                    item {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "MONTHLY CHALLENGES",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                state.challenges.forEach { ch ->
+                                    val barColor = if (ch.completed) MaterialTheme.colorScheme.primary else Color(0xFFD97706)
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(
+                                                text = if (ch.completed) "✓ ${ch.title}" else ch.title,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "${ch.progressPct}%",
+                                                style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                                                color = barColor
+                                            )
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = { (ch.progressPct / 100f).coerceIn(0f, 1f) },
+                                            color = barColor,
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                            strokeCap = StrokeCap.Round,
+                                            modifier = Modifier.fillMaxWidth().height(6.dp)
+                                        )
+                                        Text(ch.detail, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 item {
+                    var askQuery by remember { mutableStateOf("") }
                     Card(
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -1167,7 +1219,7 @@ fun DashboardScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = "AI MONTHLY COACH",
+                                    text = "AI COACH & ASK LEDGER",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -1175,7 +1227,45 @@ fun DashboardScreen(
                                     onClick = onGenerateInsightsClick,
                                     enabled = !state.isLoadingInsights
                                 ) {
-                                    Text(if (state.isLoadingInsights) "Thinking..." else "Generate")
+                                    Text(if (state.isLoadingInsights) "Thinking..." else "3 Tips")
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                OutlinedTextField(
+                                    value = askQuery,
+                                    onValueChange = { askQuery = it },
+                                    placeholder = { Text("Ask: Can I afford a 3M trip?", style = MaterialTheme.typography.bodySmall) },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Button(
+                                    onClick = {
+                                        if (askQuery.isNotBlank()) {
+                                            onAskLedgerClick(askQuery)
+                                            askQuery = ""
+                                        }
+                                    },
+                                    enabled = askQuery.isNotBlank() && !state.isAskingLedger
+                                ) {
+                                    Text(if (state.isAskingLedger) "..." else "Ask")
+                                }
+                            }
+                            state.askLedgerAnswer?.let { ans ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.secondaryContainer,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = ans,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        modifier = Modifier.padding(10.dp)
+                                    )
                                 }
                             }
                             if (state.insightsTips.isEmpty()) {
@@ -1600,6 +1690,37 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                // v2.1.0: Interactive Category Donut Chart
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().height(128.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val palette = listOf(
+                                        Color(0xFF0D9488), Color(0xFFD97706), Color(0xFF2563EB),
+                                        Color(0xFF7C3AED), Color(0xFFDB2777), Color(0xFFEA580C), Color(0xFF059669)
+                                    )
+                                    androidx.compose.foundation.Canvas(modifier = Modifier.size(116.dp)) {
+                                        var startAngle = -90f
+                                        categories.take(7).forEachIndexed { idx, cat ->
+                                            val amt = cat.totalSpent.toBigDecimalOrNull()?.toFloat() ?: 0f
+                                            val sweep = (amt / totalDecimal.toFloat().coerceAtLeast(1f)) * 360f
+                                            if (sweep > 0.5f) {
+                                                drawArc(
+                                                    color = palette[idx % palette.size],
+                                                    startAngle = startAngle,
+                                                    sweepAngle = sweep,
+                                                    useCenter = false,
+                                                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 24f)
+                                                )
+                                                startAngle += sweep
+                                            }
+                                        }
+                                    }
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("${categories.size}", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                                        Text("cats", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                                 categories.forEach { cat ->
                                     Box(
                                         modifier = Modifier.clickable {

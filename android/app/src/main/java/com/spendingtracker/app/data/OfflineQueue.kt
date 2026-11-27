@@ -20,6 +20,11 @@ data class QueuedFileEntry(
     val mimeType: String
 )
 
+data class QueuedManualTx(
+    val id: String,
+    val request: CreateTransactionRequest
+)
+
 /**
  * Persists failed media uploads in app-private storage (`filesDir/offline_queue`)
  * so receipts scanned offline are automatically uploaded once connectivity returns.
@@ -29,8 +34,38 @@ class OfflineQueue(private val context: Context) {
     private val gson = Gson()
     private val rootDir: File
         get() = File(context.filesDir, "offline_queue").apply { mkdirs() }
+    private val manualDir: File
+        get() = File(context.filesDir, "offline_manual_queue").apply { mkdirs() }
 
-    fun count(): Int = listBatches().size
+    fun count(): Int = listBatches().size + listManualTransactions().size
+
+    fun enqueueManualTransaction(request: CreateTransactionRequest): Boolean {
+        return try {
+            val id = UUID.randomUUID().toString()
+            val item = QueuedManualTx(id = id, request = request)
+            File(manualDir, "$id.json").writeText(gson.toJson(item))
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun listManualTransactions(): List<QueuedManualTx> {
+        return manualDir.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".json") }
+            ?.mapNotNull { file ->
+                try {
+                    gson.fromJson(file.readText(), QueuedManualTx::class.java)
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            .orEmpty()
+    }
+
+    fun removeManualTransaction(id: String) {
+        File(manualDir, "$id.json").delete()
+    }
 
     fun enqueue(uris: List<Uri>, sourceType: String?): Boolean {
         if (uris.isEmpty()) return false

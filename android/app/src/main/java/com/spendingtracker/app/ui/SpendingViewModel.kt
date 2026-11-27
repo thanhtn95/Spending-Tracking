@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.spendingtracker.app.data.ApiClient
+import com.spendingtracker.app.data.AskLedgerRequest
 import com.spendingtracker.app.data.BudgetRecord
 import com.spendingtracker.app.data.BudgetSuggestionsResponse
 import com.spendingtracker.app.data.BulkTransactionsRequest
@@ -47,6 +48,7 @@ import com.spendingtracker.app.data.RecurringBillItem
 import com.spendingtracker.app.data.RecurringSummaryResponse
 import com.spendingtracker.app.data.RegisterRequest
 import com.spendingtracker.app.data.Rule503020Response
+import com.spendingtracker.app.data.SpendingChallenge
 import com.spendingtracker.app.data.SplitItemRequest
 import com.spendingtracker.app.data.SplitTransactionRequest
 import com.spendingtracker.app.data.SubscriptionAuditResponse
@@ -126,6 +128,9 @@ data class UiState(
     val healthScore: FinancialHealthScore? = null,
     val emergencyRunway: EmergencyRunway? = null,
     val categoryHistory: CategoryHistoryResponse? = null,
+    val challenges: List<SpendingChallenge> = emptyList(),
+    val askLedgerAnswer: String? = null,
+    val isAskingLedger: Boolean = false,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -559,6 +564,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                                 subscriptionAudit = an.subscriptionAudit ?: it.subscriptionAudit,
                                 healthScore = an.healthScore ?: it.healthScore,
                                 emergencyRunway = an.emergencyRunway ?: it.emergencyRunway,
+                                challenges = an.challenges,
                                 rules = an.rules,
                                 tags = an.tags,
                                 trend = an.trend,
@@ -703,9 +709,22 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
         if (!_uiState.value.isAuthenticated || _uiState.value.isUploading) return
         viewModelScope.launch {
             val batches = withContext(Dispatchers.IO) { offlineQueue.listBatches() }
-            if (batches.isEmpty()) return@launch
+            val manuals = withContext(Dispatchers.IO) { offlineQueue.listManualTransactions() }
+            if (batches.isEmpty() && manuals.isEmpty()) return@launch
             var uploaded = 0
+            var syncedManuals = 0
             val textMedia = "text/plain".toMediaType()
+            for (item in manuals) {
+                try {
+                    val res = api.createTransaction(item.request)
+                    if (res.isSuccessful) {
+                        offlineQueue.removeManualTransaction(item.id)
+                        syncedManuals++
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
             for (batch in batches) {
                 try {
                     val parts = withContext(Dispatchers.IO) { offlineQueue.toMultipartParts(batch) }
@@ -723,15 +742,17 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                     break
                 }
             }
+            val msg = buildList {
+                if (syncedManuals > 0) add("Synced $syncedManuals offline transaction(s)")
+                if (uploaded > 0) add("Uploaded $uploaded queued receipt(s)")
+            }.joinToString(" · ").takeIf { it.isNotEmpty() }
             _uiState.update {
                 it.copy(
                     offlineQueueCount = offlineQueue.count(),
-                    statusMessage = if (uploaded > 0) {
-                        "Uploaded $uploaded queued receipt(s) — check Pending Drafts!"
-                    } else it.statusMessage
+                    statusMessage = msg ?: it.statusMessage
                 )
             }
-            if (uploaded > 0) refreshDashboard()
+            if (uploaded > 0 || syncedManuals > 0) refreshDashboard()
         }
     }
 
@@ -846,21 +867,20 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
     ) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            val req = CreateTransactionRequest(
+                txDate = txDate,
+                vendor = vendor.trim(),
+                description = description?.trim()?.takeIf { it.isNotEmpty() },
+                categoryName = categoryName,
+                walletId = walletId,
+                amount = amount.trim(),
+                txType = txType,
+                currency = currency,
+                isRecurring = isRecurring,
+                tags = tags
+            )
             try {
-                val res = api.createTransaction(
-                    CreateTransactionRequest(
-                        txDate = txDate,
-                        vendor = vendor.trim(),
-                        description = description?.trim()?.takeIf { it.isNotEmpty() },
-                        categoryName = categoryName,
-                        walletId = walletId,
-                        amount = amount.trim(),
-                        txType = txType,
-                        currency = currency,
-                        isRecurring = isRecurring,
-                        tags = tags
-                    )
-                )
+                val res = api.createTransaction(req)
                 if (res.isSuccessful) {
                     _uiState.update { it.copy(isLoading = false, statusMessage = "Transaction added") }
                     refreshDashboard()
@@ -871,6 +891,16 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
+            } catch (e: IOException) {
+                val queued = withContext(Dispatchers.IO) { offlineQueue.enqueueManualTransaction(req) }
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        offlineQueueCount = offlineQueue.count(),
+                        statusMessage = if (queued) "Offline — queued \"${req.vendor}\" to auto-sync" else null,
+                        errorMessage = if (queued) null else (e.localizedMessage ?: "Network error")
+                    )
+                }
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to add transaction")
@@ -1021,6 +1051,34 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 _uiState.update {
                     it.copy(isLoadingInsights = false, errorMessage = e.localizedMessage ?: "Insights failed")
+                }
+            }
+        }
+    }
+
+    fun askLedger(question: String) {
+        val clean = question.trim()
+        if (clean.isEmpty()) return
+        val ym = _uiState.value.selectedMonth
+        viewModelScope.launch {
+            _uiState.update { it.copy(isAskingLedger = true, errorMessage = null) }
+            try {
+                val res = api.askLedger(AskLedgerRequest(clean, ym.year, ym.monthValue))
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    _uiState.update {
+                        it.copy(isAskingLedger = false, askLedgerAnswer = "Q: ${body.question}\nA: ${body.answer}")
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(isAskingLedger = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isAskingLedger = false, errorMessage = e.localizedMessage ?: "Ask failed")
                 }
             }
         }

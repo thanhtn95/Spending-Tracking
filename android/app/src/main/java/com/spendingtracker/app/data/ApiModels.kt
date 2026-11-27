@@ -656,7 +656,28 @@ data class DashboardAnalyticsResponse(
     @SerializedName("yearly_wrapped") val yearlyWrapped: YearlyWrappedResponse? = null,
     @SerializedName("subscription_audit") val subscriptionAudit: SubscriptionAuditResponse? = null,
     @SerializedName("health_score") val healthScore: FinancialHealthScore? = null,
-    @SerializedName("emergency_runway") val emergencyRunway: EmergencyRunway? = null
+    @SerializedName("emergency_runway") val emergencyRunway: EmergencyRunway? = null,
+    val challenges: List<SpendingChallenge> = emptyList()
+)
+
+data class SpendingChallenge(
+    val id: String = "",
+    val title: String = "",
+    val detail: String = "",
+    @SerializedName("progress_pct") val progressPct: Int = 0,
+    val completed: Boolean = false
+)
+
+data class AskLedgerRequest(
+    val question: String,
+    val year: Int? = null,
+    val month: Int? = null
+)
+
+data class AskLedgerResponse(
+    val question: String = "",
+    val answer: String = "",
+    @SerializedName("model_used") val modelUsed: String = ""
 )
 
 data class CategoryMonthPoint(

@@ -246,6 +246,7 @@
             <h2>Category Breakdown</h2>
             <span class="muted">Confirmed Debits</span>
           </div>
+          <div id="category-donut" style="display:flex;justify-content:center;margin-bottom:12px;"></div>
           <div id="category-list" class="category-list">
             <div class="empty-block">No confirmed spending for this month yet.</div>
           </div>
@@ -456,15 +457,31 @@
         <div id="subscription-audit-list" style="margin-top:12px;"></div>
       </section>
 
-      <!-- AI Monthly Coach -->
+      <!-- v2.1.0: Monthly Spending Challenges -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Monthly Spending Challenges</h2>
+          <span class="badge-subtle">Streaks &amp; Milestones</span>
+        </div>
+        <div id="challenges-list" class="recurring-grid">
+          <div class="empty-block">Loading monthly challenges...</div>
+        </div>
+      </section>
+
+      <!-- AI Monthly Coach & Ask Your Ledger -->
       <section class="card">
         <div class="section-head">
           <div>
-            <h2>AI Monthly Coach</h2>
-            <span class="muted">1 free Flash-Lite request comparing this month vs last month</span>
+            <h2>AI Monthly Coach &amp; Ask Your Ledger</h2>
+            <span class="muted">Free Gemini Flash-Lite · Compact summary only</span>
           </div>
           <button id="btn-gen-insights" class="btn btn-primary btn-sm" type="button">Generate Insights</button>
         </div>
+        <form id="ask-ledger-form" style="display:flex;gap:8px;margin-bottom:12px;">
+          <input id="ask-ledger-input" type="text" placeholder="Ask anything: e.g. Can I afford a 3M trip this weekend?" />
+          <button id="btn-ask-ledger" class="btn btn-primary btn-sm" type="submit">Ask</button>
+        </form>
+        <div id="ask-ledger-answer" class="hidden" style="margin-bottom:12px;"></div>
         <div id="insights-body" class="insights-list">
           <div class="empty-block">Click "Generate Insights" for 3 tailored tips on your spending and debt payoff pace.</div>
         </div>

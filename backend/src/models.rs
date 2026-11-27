@@ -966,6 +966,30 @@ pub struct DashboardAnalyticsResponse {
     pub subscription_audit: SubscriptionAuditResponse,
     pub health_score: FinancialHealthScore,
     pub emergency_runway: EmergencyRunway,
+    pub challenges: Vec<SpendingChallenge>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpendingChallenge {
+    pub id: String,
+    pub title: String,
+    pub detail: String,
+    pub progress_pct: i32,
+    pub completed: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AskLedgerRequest {
+    pub question: String,
+    pub year: Option<i32>,
+    pub month: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AskLedgerResponse {
+    pub question: String,
+    pub answer: String,
+    pub model_used: String,
 }
 
 #[derive(Debug, Deserialize)]

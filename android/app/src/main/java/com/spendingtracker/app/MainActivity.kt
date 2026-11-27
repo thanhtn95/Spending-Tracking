@@ -350,6 +350,7 @@ class MainActivity : FragmentActivity() {
                             val ym = state.selectedMonth
                             exportCsvLauncher.launch("spending-ledger-${ym.year}-${ym.monthValue}.csv")
                         },
+                        onAskLedgerClick = { q -> viewModel.askLedger(q) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

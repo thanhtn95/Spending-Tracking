@@ -12,8 +12,8 @@ android {
         applicationId = "com.spendingtracker.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.0.0"
+        versionCode = 12
+        versionName = "2.1.0"
 
         // Live Cloud Run deployment URL
         buildConfigField("String", "API_BASE_URL", "\"https://spending-tracker-api-umovujhpmq-uc.a.run.app/\"")
@@ -26,11 +26,27 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("release") {
+            val relFile = file("../keystore/release.keystore")
+            if (relFile.exists()) {
+                storeFile = relFile
+                storePassword = System.getenv("KEYSTORE_PASS") ?: "spendingtracker2026"
+                keyAlias = System.getenv("KEY_ALIAS") ?: "spendingtracker"
+                keyPassword = System.getenv("KEY_PASS") ?: "spendingtracker2026"
+            } else {
+                storeFile = file("../keystore/debug.keystore")
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

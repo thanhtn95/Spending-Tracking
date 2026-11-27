@@ -25,11 +25,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.spendingtracker.app.data.SplitItemRequest
 import com.spendingtracker.app.data.TransactionRecord
 import com.spendingtracker.app.data.WalletRecord
 import java.math.BigDecimal
+import java.text.NumberFormat
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,10 +68,7 @@ fun AddTemplateDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
                     OutlinedTextField(
                         value = category,
                         onValueChange = {},
@@ -75,18 +77,9 @@ fun AddTemplateDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         categories.forEach { cat ->
-                            DropdownMenuItem(
-                                text = { Text(cat) },
-                                onClick = {
-                                    category = cat
-                                    expanded = false
-                                }
-                            )
+                            DropdownMenuItem(text = { Text(cat) }, onClick = { category = cat; expanded = false })
                         }
                     }
                 }
@@ -98,9 +91,7 @@ fun AddTemplateDialog(
                 enabled = label.isNotBlank() && (amount.toDoubleOrNull() ?: 0.0) > 0.0
             ) { Text("Save") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -127,11 +118,7 @@ fun AddWalletDialog(
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     listOf("cash" to "Cash", "bank" to "Bank", "ewallet" to "E-Wallet").forEach { (key, lbl) ->
-                        FilterChip(
-                            selected = walletType == key,
-                            onClick = { walletType = key },
-                            label = { Text(lbl) }
-                        )
+                        FilterChip(selected = walletType == key, onClick = { walletType = key }, label = { Text(lbl) })
                     }
                 }
                 OutlinedTextField(
@@ -145,14 +132,9 @@ fun AddWalletDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onCreate(name, walletType, initial) },
-                enabled = name.isNotBlank()
-            ) { Text("Add") }
+            Button(onClick = { onCreate(name, walletType, initial) }, enabled = name.isNotBlank()) { Text("Add") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -174,10 +156,7 @@ fun TransferWalletDialog(
         title = { Text("Internal Wallet Transfer") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                ExposedDropdownMenuBox(
-                    expanded = fromExpanded,
-                    onExpandedChange = { fromExpanded = !fromExpanded }
-                ) {
+                ExposedDropdownMenuBox(expanded = fromExpanded, onExpandedChange = { fromExpanded = !fromExpanded }) {
                     OutlinedTextField(
                         value = fromWallet?.name ?: "",
                         onValueChange = {},
@@ -186,25 +165,13 @@ fun TransferWalletDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = fromExpanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
-                        expanded = fromExpanded,
-                        onDismissRequest = { fromExpanded = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = fromExpanded, onDismissRequest = { fromExpanded = false }) {
                         wallets.forEach { w ->
-                            DropdownMenuItem(
-                                text = { Text(w.name) },
-                                onClick = {
-                                    fromWallet = w
-                                    fromExpanded = false
-                                }
-                            )
+                            DropdownMenuItem(text = { Text(w.name) }, onClick = { fromWallet = w; fromExpanded = false })
                         }
                     }
                 }
-                ExposedDropdownMenuBox(
-                    expanded = toExpanded,
-                    onExpandedChange = { toExpanded = !toExpanded }
-                ) {
+                ExposedDropdownMenuBox(expanded = toExpanded, onExpandedChange = { toExpanded = !toExpanded }) {
                     OutlinedTextField(
                         value = toWallet?.name ?: "",
                         onValueChange = {},
@@ -213,18 +180,9 @@ fun TransferWalletDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = toExpanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
-                        expanded = toExpanded,
-                        onDismissRequest = { toExpanded = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = toExpanded, onDismissRequest = { toExpanded = false }) {
                         wallets.forEach { w ->
-                            DropdownMenuItem(
-                                text = { Text(w.name) },
-                                onClick = {
-                                    toWallet = w
-                                    toExpanded = false
-                                }
-                            )
+                            DropdownMenuItem(text = { Text(w.name) }, onClick = { toWallet = w; toExpanded = false })
                         }
                     }
                 }
@@ -248,9 +206,7 @@ fun TransferWalletDialog(
                 enabled = fromWallet != null && toWallet != null && fromWallet?.id != toWallet?.id && (amount.toDoubleOrNull() ?: 0.0) > 0.0
             ) { Text("Transfer") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -277,10 +233,7 @@ fun AddRuleDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = !expanded }) {
                     OutlinedTextField(
                         value = category,
                         onValueChange = {},
@@ -289,32 +242,18 @@ fun AddRuleDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier.menuAnchor().fillMaxWidth()
                     )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                         categories.forEach { cat ->
-                            DropdownMenuItem(
-                                text = { Text(cat) },
-                                onClick = {
-                                    category = cat
-                                    expanded = false
-                                }
-                            )
+                            DropdownMenuItem(text = { Text(cat) }, onClick = { category = cat; expanded = false })
                         }
                     }
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = { onSave(pattern, category) },
-                enabled = pattern.isNotBlank()
-            ) { Text("Save Rule") }
+            Button(onClick = { onSave(pattern, category) }, enabled = pattern.isNotBlank()) { Text("Save Rule") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
@@ -350,22 +289,12 @@ fun SplitTransactionDialog(
                 rows.forEachIndexed { idx, (cat, amt) ->
                     var expanded by remember { mutableStateOf(false) }
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
-                        OutlinedButton(
-                            onClick = { expanded = true },
-                            modifier = Modifier.weight(1f)
-                        ) { Text(cat, maxLines = 1) }
-                        DropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
+                        OutlinedButton(onClick = { expanded = true }, modifier = Modifier.weight(1f)) {
+                            Text(cat, maxLines = 1)
+                        }
+                        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                             categories.forEach { c ->
-                                DropdownMenuItem(
-                                    text = { Text(c) },
-                                    onClick = {
-                                        rows[idx] = c to amt
-                                        expanded = false
-                                    }
-                                )
+                                DropdownMenuItem(text = { Text(c) }, onClick = { rows[idx] = c to amt; expanded = false })
                             }
                         }
                         OutlinedTextField(
@@ -378,21 +307,131 @@ fun SplitTransactionDialog(
                         )
                     }
                 }
-                TextButton(onClick = { rows.add("Uncategorized" to "0") }) {
-                    Text("+ Add Split Line")
-                }
+                TextButton(onClick = { rows.add("Uncategorized" to "0") }) { Text("+ Add Split Line") }
             }
         },
         confirmButton = {
             Button(
-                onClick = {
-                    onSplit(rows.map { SplitItemRequest(categoryName = it.first, amount = it.second.trim()) })
-                },
+                onClick = { onSplit(rows.map { SplitItemRequest(categoryName = it.first, amount = it.second.trim()) }) },
                 enabled = isBalanced
             ) { Text("Apply Split") }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun ChangePasswordDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (currentPassword: String, newPassword: String) -> Unit
+) {
+    var current by remember { mutableStateOf("") }
+    var newPwd by remember { mutableStateOf("") }
+    var confirm by remember { mutableStateOf("") }
+    val valid = current.length >= 8 && newPwd.length >= 8 && newPwd == confirm
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Change Password") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = current,
+                    onValueChange = { current = it },
+                    label = { Text("Current Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = newPwd,
+                    onValueChange = { newPwd = it },
+                    label = { Text("New Password (min 8 chars)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = confirm,
+                    onValueChange = { confirm = it },
+                    label = { Text("Confirm New Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSubmit(current, newPwd) }, enabled = valid) { Text("Update") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+fun DebtPayoffDialog(
+    currency: String,
+    onDismiss: () -> Unit
+) {
+    var balance by remember { mutableStateOf("") }
+    var payment by remember { mutableStateOf("") }
+    var apr by remember { mutableStateOf("0") }
+
+    val resultText = remember(balance, payment, apr) {
+        val bal = balance.toDoubleOrNull() ?: return@remember ""
+        val pmt = payment.toDoubleOrNull() ?: return@remember ""
+        val rate = (apr.toDoubleOrNull() ?: 0.0) / 100.0 / 12.0
+        if (bal <= 0.0 || pmt <= 0.0) return@remember ""
+        if (rate > 0.0 && pmt <= bal * rate) return@remember "Monthly payment is too low to cover interest."
+        var rem = bal
+        var months = 0
+        var totalInt = 0.0
+        while (rem > 0.01 && months < 600) {
+            val interest = rem * rate
+            totalInt += interest
+            rem = rem + interest - pmt
+            months += 1
         }
+        val target = YearMonth.now().plusMonths(months.toLong())
+        val lbl = target.format(DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault()))
+        val intFmt = NumberFormat.getNumberInstance(Locale.getDefault()).format(totalInt.toLong())
+        "Debt-free in $months mo ($lbl) · Est. interest: $intFmt $currency"
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Debt-Free Date Calculator") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = balance,
+                    onValueChange = { balance = it },
+                    label = { Text("Remaining Debt ($currency)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = payment,
+                    onValueChange = { payment = it },
+                    label = { Text("Monthly Payment") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = apr,
+                    onValueChange = { apr = it },
+                    label = { Text("Interest Rate (APR %, optional)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (resultText.isNotBlank()) {
+                    Text(resultText)
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onDismiss) { Text("Done") } }
     )
 }

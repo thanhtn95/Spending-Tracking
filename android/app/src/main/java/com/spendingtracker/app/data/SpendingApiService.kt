@@ -25,6 +25,9 @@ interface SpendingApiService {
     @GET("api/v1/auth/me")
     suspend fun me(): Response<UserProfile>
 
+    @POST("api/v1/auth/change-password")
+    suspend fun changePassword(@Body request: ChangePasswordRequest): Response<Unit>
+
     @Multipart
     @POST("api/v1/ingest/media")
     suspend fun ingestMedia(

@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.spendingtracker.app.data.ApiClient
 import com.spendingtracker.app.data.BudgetRecord
 import com.spendingtracker.app.data.BulkTransactionsRequest
+import com.spendingtracker.app.data.CachedDashboardSnapshot
+import com.spendingtracker.app.data.ChangePasswordRequest
 import com.spendingtracker.app.data.ConfirmTransactionItem
 import com.spendingtracker.app.data.ConfirmTransactionsRequest
 import com.spendingtracker.app.data.CreateCategoryRequest
@@ -15,6 +17,7 @@ import com.spendingtracker.app.data.CreateIouRequest
 import com.spendingtracker.app.data.CreateTemplateRequest
 import com.spendingtracker.app.data.CreateTransactionRequest
 import com.spendingtracker.app.data.CreateWalletRequest
+import com.spendingtracker.app.data.DashboardCache
 import com.spendingtracker.app.data.DraftTransactionPreview
 import com.spendingtracker.app.data.ForecastAndHealthResponse
 import com.spendingtracker.app.data.GoalRecord
@@ -114,6 +117,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
 
     private val tokenStore = TokenStore(application.applicationContext)
     private val offlineQueue = OfflineQueue(application.applicationContext)
+    private val dashboardCache = DashboardCache(application.applicationContext)
     private val api = ApiClient.create(tokenStore)
 
     private val _uiState = MutableStateFlow(
@@ -133,6 +137,22 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
 
     init {
         if (_uiState.value.isAuthenticated) {
+            dashboardCache.load()?.let { cached ->
+                _uiState.update {
+                    it.copy(
+                        monthlySpending = cached.monthlySpending,
+                        transactions = cached.transactions,
+                        wallets = cached.wallets,
+                        templates = cached.templates,
+                        budgets = cached.budgets,
+                        goals = cached.goals,
+                        ious = cached.ious,
+                        comparison = cached.comparison,
+                        forecast = cached.forecast,
+                        preferences = cached.preferences
+                    )
+                }
+            }
             refreshDashboard()
         }
     }
@@ -366,8 +386,39 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
 
     fun logout() {
         tokenStore.clear()
+        dashboardCache.clear()
         queuedShareUpload = null
         _uiState.value = UiState(isAuthenticated = false, offlineQueueCount = offlineQueue.count())
+    }
+
+    fun changePassword(currentPassword: String, newPassword: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.changePassword(ChangePasswordRequest(currentPassword, newPassword))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Password updated successfully") }
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Password change failed") }
+            }
+        }
+    }
+
+    fun restoreDeletedTransaction(tx: TransactionRecord) {
+        createManualTransaction(
+            txDate = tx.txDate,
+            vendor = tx.vendor,
+            amount = tx.amount,
+            txType = tx.txType,
+            currency = tx.currency,
+            categoryName = tx.categoryName ?: "Uncategorized",
+            description = tx.description,
+            isRecurring = tx.isRecurring,
+            walletId = tx.walletId,
+            tags = tx.tags
+        )
     }
 
     fun previousMonth() {
@@ -451,6 +502,22 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                             offlineQueueCount = offlineQueue.count()
                         )
                     }
+                    // Persist offline read-only cache snapshot
+                    val snap = _uiState.value
+                    dashboardCache.save(
+                        CachedDashboardSnapshot(
+                            monthlySpending = snap.monthlySpending,
+                            transactions = snap.transactions,
+                            wallets = snap.wallets,
+                            templates = snap.templates,
+                            budgets = snap.budgets,
+                            goals = snap.goals,
+                            ious = snap.ious,
+                            comparison = snap.comparison,
+                            forecast = snap.forecast,
+                            preferences = snap.preferences
+                        )
+                    )
                     // Try flushing offline receipts quietly if any are queued
                     if (offlineQueue.count() > 0) {
                         flushOfflineQueue()
@@ -464,11 +531,13 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                     _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
                 }
             } catch (e: Exception) {
+                val hasCache = _uiState.value.monthlySpending != null
                 _uiState.update {
                     it.copy(
                         isLoading = false,
                         offlineQueueCount = offlineQueue.count(),
-                        errorMessage = e.localizedMessage ?: "Failed to load data"
+                        statusMessage = if (hasCache) "Offline — showing cached ledger" else it.statusMessage,
+                        errorMessage = if (hasCache) null else (e.localizedMessage ?: "Failed to load data")
                     )
                 }
             }

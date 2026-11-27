@@ -41,6 +41,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/v1/auth/login", post(auth::login))
         // Authenticated routes (require Authorization: Bearer <jwt>)
         .route("/api/v1/auth/me", get(auth::me))
+        .route("/api/v1/auth/change-password", post(auth::change_password))
         .route("/api/v1/ingest/media", post(ingest::ingest_media))
         .route(
             "/api/v1/transactions/confirm",

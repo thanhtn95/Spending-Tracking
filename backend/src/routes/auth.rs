@@ -1,6 +1,6 @@
 use crate::{
     error::AppError,
-    models::{AuthResponse, LoginRequest, RegisterRequest, UserProfile},
+    models::{AuthResponse, ChangePasswordRequest, LoginRequest, RegisterRequest, UserProfile},
     routes::AppState,
     services::auth::{create_access_token, hash_password, verify_password, AuthUser},
 };
@@ -164,6 +164,48 @@ pub async fn me(
         Some(u) => Ok(Json(u)),
         None => Err(AppError::Unauthorized("User account no longer exists".to_string())),
     }
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Result<StatusCode, AppError> {
+    validate_password(&payload.new_password)?;
+
+    let stored_hash: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+            .bind(auth.user_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let Some(stored_hash) = stored_hash else {
+        return Err(AppError::Unauthorized("User not found".to_string()));
+    };
+
+    let current_plain = payload.current_password;
+    let valid = tokio::task::spawn_blocking(move || verify_password(&current_plain, &stored_hash))
+        .await
+        .map_err(|e| AppError::Internal(format!("Password verification task failed: {e}")))??;
+
+    if !valid {
+        return Err(AppError::BadRequest(
+            "Current password is incorrect".to_string(),
+        ));
+    }
+
+    let new_plain = payload.new_password;
+    let new_hash = tokio::task::spawn_blocking(move || hash_password(&new_plain))
+        .await
+        .map_err(|e| AppError::Internal(format!("Password hashing task failed: {e}")))??;
+
+    sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+        .bind(auth.user_id)
+        .bind(&new_hash)
+        .execute(&state.db)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn normalize_and_validate_email(raw: &str) -> Result<String, AppError> {

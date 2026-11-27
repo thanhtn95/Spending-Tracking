@@ -344,6 +344,16 @@ body.privacy-mode .badge-subtle.mono {
   padding-top: 6px;
 }
 
+/* Printable Monthly PDF Report (#2) */
+@media print {
+  .topbar, .nav-tabs, .nl-bar, .quick-strip, .btn, button, form, .table-filters, .bulk-bar, .range-bar, .dropzone, .upload-controls, .toast, .modal-backdrop {
+    display: none !important;
+  }
+  body { background: #fff !important; color: #111 !important; }
+  [data-tab-panel] { display: block !important; }
+  .card, .summary-strip { box-shadow: none !important; break-inside: avoid; border: 1px solid #ddd !important; }
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {

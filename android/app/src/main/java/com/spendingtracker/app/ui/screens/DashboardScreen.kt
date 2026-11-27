@@ -24,22 +24,31 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import kotlinx.coroutines.launch
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -126,6 +135,11 @@ fun DashboardScreen(
     onBulkCategoryClick: (List<String>, String) -> Unit,
     onSavePreferences: (Int?, String?, String?) -> Unit,
     onEndEventClick: () -> Unit,
+    onExportPdfClick: () -> Unit,
+    onChangePasswordClick: () -> Unit,
+    onDebtCalcClick: () -> Unit,
+    onSwipeDeleteTx: (TransactionRecord) -> Unit,
+    onUndoDeleteTx: (TransactionRecord) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -135,6 +149,8 @@ fun DashboardScreen(
     onClearMessages: () -> Unit
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
 
     var selectedTab by remember { mutableStateOf(0) } // 0=Home, 1=Ledger, 2=Plan, 3=More
@@ -293,7 +309,7 @@ fun DashboardScreen(
                 NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Default.ReceiptLong, contentDescription = "Ledger") },
+                    icon = { Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = "Ledger") },
                     label = { Text("Ledger") }
                 )
                 NavigationBarItem(
@@ -512,7 +528,12 @@ fun DashboardScreen(
                                 )
                                 val canZero = runningVal.compareTo(BigDecimal.ZERO) != 0
                                 Surface(
-                                    onClick = { if (canZero) onZeroBalanceClick() },
+                                    onClick = {
+                                        if (canZero) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onZeroBalanceClick()
+                                        }
+                                    },
                                     enabled = canZero,
                                     shape = RoundedCornerShape(99.dp),
                                     color = when {
@@ -942,7 +963,10 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                                TextButton(onClick = onAddGoalClick) { Text("+ Goal") }
+                                Row {
+                                    TextButton(onClick = onDebtCalcClick) { Text("Payoff Calc") }
+                                    TextButton(onClick = onAddGoalClick) { Text("+ Goal") }
+                                }
                             }
                             if (state.goals.isEmpty()) {
                                 Text(
@@ -1243,6 +1267,31 @@ fun DashboardScreen(
                     )
                 }
 
+                // Reports & Account Security (#2 & #3) — More tab
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "REPORTS & SECURITY",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                TextButton(onClick = onExportPdfClick) { Text("Save Monthly PDF") }
+                                TextButton(onClick = onChangePasswordClick) { Text("Change Password") }
+                            }
+                        }
+                    }
+                }
+
                 }
 
                 // Monthly Spending Calendar Heatmap (#4) — Home tab
@@ -1510,22 +1559,63 @@ fun DashboardScreen(
                         }
                         items(dayTxs, key = { it.id }) { tx ->
                             val isSelected = selectedIds.contains(tx.id)
-                            Surface(
-                                onClick = {
-                                    if (selectionMode) {
-                                        selectedIds = if (isSelected) selectedIds - tx.id else selectedIds + tx.id
+                            val dismissState = rememberSwipeToDismissBoxState(
+                                confirmValueChange = { value ->
+                                    if (value == SwipeToDismissBoxValue.EndToStart && !selectionMode) {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onSwipeDeleteTx(tx)
+                                        scope.launch {
+                                            val res = snackbarHostState.showSnackbar(
+                                                message = "Deleted ${tx.vendor}",
+                                                actionLabel = "Undo"
+                                            )
+                                            if (res == SnackbarResult.ActionPerformed) {
+                                                onUndoDeleteTx(tx)
+                                            }
+                                        }
+                                        true
                                     } else {
-                                        onTransactionClick(tx)
+                                        false
                                     }
-                                },
-                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                                shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(
-                                    if (isSelected) 1.5.dp else 1.dp,
-                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                                )
+                                }
+                            )
+                            SwipeToDismissBox(
+                                state = dismissState,
+                                enableDismissFromStartToEnd = false,
+                                backgroundContent = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(RoundedCornerShape(14.dp))
+                                            .background(MaterialTheme.colorScheme.errorContainer)
+                                            .padding(horizontal = 20.dp),
+                                        contentAlignment = Alignment.CenterEnd
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete",
+                                            tint = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
                             ) {
-                                TransactionRow(tx = tx, baseCurrency = baseCurrency, privacyMode = state.privacyMode)
+                                Surface(
+                                    onClick = {
+                                        if (selectionMode) {
+                                            selectedIds = if (isSelected) selectedIds - tx.id else selectedIds + tx.id
+                                        } else {
+                                            onTransactionClick(tx)
+                                        }
+                                    },
+                                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                                    shape = RoundedCornerShape(14.dp),
+                                    border = BorderStroke(
+                                        if (isSelected) 1.5.dp else 1.dp,
+                                        if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                    )
+                                ) {
+                                    TransactionRow(tx = tx, baseCurrency = baseCurrency, privacyMode = state.privacyMode)
+                                }
                             }
                         }
                     }

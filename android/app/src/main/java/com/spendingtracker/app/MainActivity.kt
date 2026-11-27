@@ -56,6 +56,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import com.spendingtracker.app.ui.screens.AddRuleDialog
 import com.spendingtracker.app.ui.screens.AddTemplateDialog
 import com.spendingtracker.app.ui.screens.AddWalletDialog
+import com.spendingtracker.app.ui.screens.ChangePasswordDialog
+import com.spendingtracker.app.ui.screens.DebtPayoffDialog
 import com.spendingtracker.app.ui.screens.NewCategoryDialog
 import com.spendingtracker.app.ui.screens.PdfPasswordDialog
 import com.spendingtracker.app.ui.screens.SetBudgetDialog
@@ -147,6 +149,21 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private val exportPdfLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/pdf")
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                contentResolver.openOutputStream(uri)?.use { out ->
+                    com.spendingtracker.app.data.PdfReportGenerator.writeMonthlyReport(viewModel.uiState.value, out)
+                }
+                Toast.makeText(this, "Monthly PDF report saved", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(this, "PDF export failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private val importBackupLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -231,6 +248,8 @@ class MainActivity : FragmentActivity() {
                     var showWalletDialog by remember { mutableStateOf(false) }
                     var showTransferDialog by remember { mutableStateOf(false) }
                     var showRuleDialog by remember { mutableStateOf(false) }
+                    var showChangePwdDialog by remember { mutableStateOf(false) }
+                    var showDebtCalcDialog by remember { mutableStateOf(false) }
 
                     LaunchedEffect(widgetLaunchAction) {
                         when (widgetLaunchAction) {
@@ -295,6 +314,14 @@ class MainActivity : FragmentActivity() {
                         onBulkCategoryClick = { ids, cat -> viewModel.bulkUpdateCategory(ids, cat) },
                         onSavePreferences = { day, tag, cur -> viewModel.updatePreferences(day, tag, cur) },
                         onEndEventClick = { viewModel.updatePreferences(null, "", "") },
+                        onExportPdfClick = {
+                            val ym = state.selectedMonth
+                            exportPdfLauncher.launch("spending-report-${ym.year}-${ym.monthValue}.pdf")
+                        },
+                        onChangePasswordClick = { showChangePwdDialog = true },
+                        onDebtCalcClick = { showDebtCalcDialog = true },
+                        onSwipeDeleteTx = { tx -> viewModel.deleteTransaction(tx.id) },
+                        onUndoDeleteTx = { tx -> viewModel.restoreDeletedTransaction(tx) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)
@@ -387,6 +414,23 @@ class MainActivity : FragmentActivity() {
                                 viewModel.upsertRule(pattern, cat)
                                 showRuleDialog = false
                             }
+                        )
+                    }
+
+                    if (showChangePwdDialog) {
+                        ChangePasswordDialog(
+                            onDismiss = { showChangePwdDialog = false },
+                            onSubmit = { cur, next ->
+                                viewModel.changePassword(cur, next)
+                                showChangePwdDialog = false
+                            }
+                        )
+                    }
+
+                    if (showDebtCalcDialog) {
+                        DebtPayoffDialog(
+                            currency = state.monthlySpending?.baseCurrency ?: "VND",
+                            onDismiss = { showDebtCalcDialog = false }
                         )
                     }
 

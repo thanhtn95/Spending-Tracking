@@ -59,6 +59,7 @@
           <span class="brand-title">Spending Tracker</span>
         </div>
         <div class="topbar-right">
+          <button id="btn-print-report" class="btn btn-ghost btn-sm" type="button" title="Print or Save Monthly PDF Report">PDF</button>
           <button id="btn-privacy-toggle" class="btn btn-ghost btn-sm" type="button" title="Hide/show amounts">👁 Hide</button>
           <button id="btn-theme-toggle" class="btn btn-ghost btn-sm" type="button" title="Toggle light/dark theme">Theme</button>
           <button id="btn-open-add" class="btn btn-primary btn-sm" type="button">+ Add</button>
@@ -384,6 +385,16 @@
             <input id="goal-target" class="mono" type="number" min="1" required placeholder="Target" />
             <button class="btn btn-ghost btn-sm" type="submit">Add</button>
           </form>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:6px;">DEBT-FREE DATE ESTIMATOR</div>
+            <div class="inline-form-4">
+              <input id="debt-calc-bal" class="mono" type="number" min="1" placeholder="Debt balance" />
+              <input id="debt-calc-pmt" class="mono" type="number" min="1" placeholder="Monthly pay" />
+              <input id="debt-calc-apr" class="mono" type="number" step="0.1" min="0" placeholder="APR % (0)" />
+              <button id="btn-debt-calc" class="btn btn-ghost btn-sm" type="button">Calc</button>
+            </div>
+            <div id="debt-calc-result" class="muted mono" style="font-size:0.8rem;margin-top:6px;"></div>
+          </div>
         </section>
 
         <section class="card">
@@ -472,6 +483,20 @@
           </div>
         </section>
       </div>
+
+      <!-- Account Security: Change Password (#3) -->
+      <section class="card" style="margin-top:20px;">
+        <div class="section-head">
+          <h2>Account Security</h2>
+          <span class="muted">Rotate your login password</span>
+        </div>
+        <form id="pwd-change-form" class="inline-form-4">
+          <input id="cur-pwd-input" type="password" required minlength="8" placeholder="Current password" />
+          <input id="new-pwd-input" type="password" required minlength="8" placeholder="New password (min 8 chars)" />
+          <input id="confirm-pwd-input" type="password" required minlength="8" placeholder="Confirm new password" />
+          <button class="btn btn-primary btn-sm" type="submit">Update Password</button>
+        </form>
+      </section>
       </div>
 
       <!-- TAB: LEDGER -->

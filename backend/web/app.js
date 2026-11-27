@@ -1418,6 +1418,64 @@
     });
   }
 
+  // --- Printable PDF Report (#2), Debt Payoff Calc (#4) & Change Password (#3) ---
+  const btnPrintReport = document.getElementById("btn-print-report");
+  if (btnPrintReport) {
+    btnPrintReport.addEventListener("click", () => window.print());
+  }
+
+  const btnDebtCalc = document.getElementById("btn-debt-calc");
+  if (btnDebtCalc) {
+    btnDebtCalc.addEventListener("click", () => {
+      const bal = Number(document.getElementById("debt-calc-bal")?.value || 0);
+      const pmt = Number(document.getElementById("debt-calc-pmt")?.value || 0);
+      const apr = Number(document.getElementById("debt-calc-apr")?.value || 0);
+      const out = document.getElementById("debt-calc-result");
+      if (!out || bal <= 0 || pmt <= 0) return;
+      const r = apr / 100 / 12;
+      if (r > 0 && pmt <= bal * r) {
+        out.textContent = "Monthly payment is too low to cover interest.";
+        return;
+      }
+      let rem = bal, months = 0, totalInt = 0;
+      while (rem > 0.01 && months < 600) {
+        const interest = rem * r;
+        totalInt += interest;
+        rem = rem + interest - pmt;
+        months += 1;
+      }
+      const target = new Date();
+      target.setMonth(target.getMonth() + months);
+      const dateLbl = target.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+      out.textContent = `Debt-free in ${months} mo (${dateLbl}) · Est. interest: ${formatNumber(Math.round(totalInt))} ${state.baseCurrency}`;
+    });
+  }
+
+  const pwdChangeForm = document.getElementById("pwd-change-form");
+  if (pwdChangeForm) {
+    pwdChangeForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const curPwd = document.getElementById("cur-pwd-input").value;
+      const newPwd = document.getElementById("new-pwd-input").value;
+      const confPwd = document.getElementById("confirm-pwd-input").value;
+      if (newPwd !== confPwd) {
+        showToast("New passwords do not match.");
+        return;
+      }
+      try {
+        await apiFetch("/api/v1/auth/change-password", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ current_password: curPwd, new_password: newPwd }),
+        });
+        pwdChangeForm.reset();
+        showToast("Password updated successfully.");
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+
   // --- Forecast, Net Worth Line Chart & Smart Alerts (#2, #4, #5) ---
   function renderForecast(f) {
     if (!f) return;

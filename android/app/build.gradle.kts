@@ -12,8 +12,8 @@ android {
         applicationId = "com.spendingtracker.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.1.0"
+        versionCode = 13
+        versionName = "2.2.0"
 
         // Live Cloud Run deployment URL
         buildConfigField("String", "API_BASE_URL", "\"https://spending-tracker-api-umovujhpmq-uc.a.run.app/\"")

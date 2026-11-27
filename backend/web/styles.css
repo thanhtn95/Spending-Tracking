@@ -1,25 +1,103 @@
 :root {
-  --bg: #f7f7f5;
+  --bg: #f6f5f1;
   --surface: #ffffff;
-  --surface-subtle: #f1f1ed;
-  --border: #e6e5e0;
-  --border-strong: #d4d3cc;
+  --surface-subtle: #f1f0eb;
+  --border: rgba(20, 21, 19, 0.08);
+  --border-strong: rgba(20, 21, 19, 0.15);
   --text: #141513;
-  --muted: #6b6d67;
+  --muted: #686b64;
   --accent: #0d5c4b;
   --accent-hover: #094538;
-  --accent-soft: #e6f2ef;
+  --accent-soft: rgba(13, 92, 75, 0.09);
   --accent-soft-text: #094538;
+  --hero-start: #0f3d33;
+  --hero-end: #0a2922;
   --danger: #b91c1c;
   --danger-soft: #fef2f2;
   --warn: #b45309;
   --warn-soft: #fffbeb;
-  --radius-lg: 16px;
-  --radius-md: 10px;
-  --radius-sm: 8px;
-  --shadow-sm: 0 1px 2px rgba(20, 21, 19, 0.04);
+  --radius-lg: 18px;
+  --radius-md: 12px;
+  --radius-sm: 9px;
+  --shadow-sm: 0 1px 2px rgba(20, 21, 19, 0.03), 0 6px 18px rgba(20, 21, 19, 0.035);
   --shadow-lg: 0 20px 50px rgba(20, 21, 19, 0.14);
 }
+
+/* Curated Editorial Accent Themes (v2.2.0) */
+:root[data-accent="ocean"] { --accent: #1d4ed8; --accent-hover: #1e40af; --accent-soft: rgba(29, 78, 216, 0.1); --accent-soft-text: #1e40af; --hero-start: #123166; --hero-end: #0b1f44; }
+:root[data-accent="indigo"] { --accent: #4338ca; --accent-hover: #3730a3; --accent-soft: rgba(67, 56, 202, 0.1); --accent-soft-text: #3730a3; --hero-start: #262063; --hero-end: #17133f; }
+:root[data-accent="terracotta"] { --accent: #b45309; --accent-hover: #92400e; --accent-soft: rgba(180, 83, 9, 0.1); --accent-soft-text: #92400e; --hero-start: #5a2a0c; --hero-end: #381806; }
+:root[data-accent="obsidian"] { --accent: #18181b; --accent-hover: #27272a; --accent-soft: rgba(24, 24, 27, 0.08); --accent-soft-text: #18181b; --hero-start: #1c1d1f; --hero-end: #0f1012; }
+
+/* Signature Editorial Hero Balance Card + Tactile Polish */
+.summary-strip {
+  background: linear-gradient(135deg, var(--hero-start), var(--hero-end)) !important;
+  color: #f8faf9 !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  box-shadow: 0 14px 36px rgba(10, 41, 34, 0.18) !important;
+}
+.summary-strip .eyebrow,
+.summary-strip .kpi-label { color: rgba(248, 250, 249, 0.68) !important; }
+.summary-strip .hero-total { color: #ffffff !important; letter-spacing: -0.04em; }
+.summary-strip .hero-total.text-debt { color: #fca5a5 !important; }
+.summary-strip .hero-total.text-credit { color: #6ee7b7 !important; }
+.summary-strip .kpi-mini {
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  backdrop-filter: blur(8px);
+}
+.summary-strip .kpi-val { color: #f8faf9 !important; }
+.summary-strip .kpi-val.text-credit { color: #6ee7b7 !important; }
+.summary-strip .kpi-val.text-debt,
+.summary-strip .kpi-val.text-debit { color: #fca5a5 !important; }
+.summary-strip .month-stepper {
+  background: rgba(255, 255, 255, 0.1) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  color: #ffffff !important;
+}
+.summary-strip .stepper-btn { color: #ffffff !important; }
+.summary-strip .stepper-btn:hover { background: rgba(255, 255, 255, 0.16) !important; }
+.summary-strip .btn-zero-pill {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #ffffff !important;
+}
+.summary-strip .btn-zero-pill:hover:not(:disabled) { background: rgba(255, 255, 255, 0.2) !important; }
+
+.card {
+  transition: box-shadow 0.22s ease, border-color 0.22s ease;
+}
+.card:hover {
+  border-color: var(--border-strong);
+}
+.cat-bar-fill {
+  transition: width 0.55s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.cat-squircle {
+  width: 28px;
+  height: 28px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.accent-swatches {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.accent-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.accent-swatch:hover { transform: scale(1.1); }
+.accent-swatch.active { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {

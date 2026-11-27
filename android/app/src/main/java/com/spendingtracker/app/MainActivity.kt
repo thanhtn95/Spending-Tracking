@@ -205,7 +205,7 @@ class MainActivity : FragmentActivity() {
                 "light" -> false
                 else -> isSystemInDarkTheme()
             }
-            SpendingTrackerTheme(darkTheme = useDarkTheme) {
+            SpendingTrackerTheme(darkTheme = useDarkTheme, accentPalette = state.accentPalette) {
                 var biometricUnlocked by remember { mutableStateOf(!state.biometricEnabled) }
 
                 LaunchedEffect(state.isAuthenticated, state.biometricEnabled) {
@@ -351,6 +351,7 @@ class MainActivity : FragmentActivity() {
                             exportCsvLauncher.launch("spending-ledger-${ym.year}-${ym.monthValue}.csv")
                         },
                         onAskLedgerClick = { q -> viewModel.askLedger(q) },
+                        onSelectAccentPalette = { p -> viewModel.setAccentPalette(p) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

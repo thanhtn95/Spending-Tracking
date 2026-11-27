@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/assets/styles.css?v=2.1.0" />
+  <link rel="stylesheet" href="/assets/styles.css?v=2.2.0" />
 </head>
 <body>
   <!-- Auth View -->
@@ -542,6 +542,21 @@
 
       <!-- TAB: TOOLS -->
       <div data-tab-panel="tools" class="hidden">
+      <!-- v2.2.0: Accent Palette Selector -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Appearance &amp; Accent Palette</h2>
+          <div class="accent-swatches" role="group" aria-label="Accent color theme">
+            <button class="accent-swatch" data-accent-pick="forest" style="background:#0d5c4b;" title="Forest" type="button"></button>
+            <button class="accent-swatch" data-accent-pick="ocean" style="background:#1d4ed8;" title="Ocean" type="button"></button>
+            <button class="accent-swatch" data-accent-pick="indigo" style="background:#4338ca;" title="Indigo" type="button"></button>
+            <button class="accent-swatch" data-accent-pick="terracotta" style="background:#b45309;" title="Terracotta" type="button"></button>
+            <button class="accent-swatch" data-accent-pick="obsidian" style="background:#18181b;" title="Obsidian" type="button"></button>
+          </div>
+        </div>
+        <div class="muted" style="font-size:0.82rem;">Choose a restrained editorial accent theme for your ledger.</div>
+      </section>
+
       <!-- Payday Cycle & Travel / Event Mode (#6 & #7) -->
       <section class="card" style="margin-bottom:20px;">
         <div class="section-head">
@@ -918,6 +933,6 @@
     </div>
   </div>
 
-  <script src="/assets/app.js?v=2.1.0"></script>
+  <script src="/assets/app.js?v=2.2.0"></script>
 </body>
 </html>

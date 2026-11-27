@@ -101,6 +101,7 @@ data class UiState(
     val isAuthenticated: Boolean = false,
     val biometricEnabled: Boolean = false,
     val themeMode: String = "system",
+    val accentPalette: String = "forest",
     val privacyMode: Boolean = false,
     val bankAlertsEnabled: Boolean = false,
     val userEmail: String? = null,
@@ -171,6 +172,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             isAuthenticated = !tokenStore.getToken().isNullOrBlank(),
             biometricEnabled = tokenStore.isBiometricEnabled(),
             themeMode = tokenStore.getThemeMode(),
+            accentPalette = tokenStore.getAccentPalette(),
             privacyMode = tokenStore.isPrivacyMode(),
             bankAlertsEnabled = tokenStore.isBankAlertsEnabled(),
             userEmail = tokenStore.getEmail(),
@@ -1537,6 +1539,11 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Import failed") }
             }
         }
+    }
+
+    fun setAccentPalette(palette: String) {
+        tokenStore.setAccentPalette(palette)
+        _uiState.update { it.copy(accentPalette = palette) }
     }
 
     private fun flushQueuedUpload() {

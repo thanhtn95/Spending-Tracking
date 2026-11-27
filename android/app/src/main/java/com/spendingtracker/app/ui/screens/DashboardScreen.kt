@@ -1,8 +1,11 @@
 package com.spendingtracker.app.ui.screens
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -91,6 +94,8 @@ import com.spendingtracker.app.data.MonthlyTrendPoint
 import com.spendingtracker.app.data.TransactionRecord
 import com.spendingtracker.app.ui.UiState
 import com.spendingtracker.app.ui.theme.categoryAccentColor
+import com.spendingtracker.app.ui.theme.categoryIcon
+import com.spendingtracker.app.ui.theme.heroGradientColors
 import java.math.BigDecimal
 import java.text.NumberFormat
 import java.time.LocalDate
@@ -154,6 +159,7 @@ fun DashboardScreen(
     onLogBillSplit: (String, String, String, Int) -> Unit,
     onExportCsvClick: () -> Unit,
     onAskLedgerClick: (String) -> Unit,
+    onSelectAccentPalette: (String) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -463,14 +469,19 @@ fun DashboardScreen(
                     }
                 }
 
-                // Running Balance Card (with Carryover) — shown on Home tab
+                // Signature Editorial Hero Balance Card (v2.2.0) — shown on Home tab
                 if (selectedTab == 0) {
                 item {
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-                        modifier = Modifier.fillMaxWidth()
+                    val heroBrush = Brush.linearGradient(heroGradientColors(state.accentPalette))
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color.Transparent,
+                        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.12f)),
+                        shadowElevation = 6.dp,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(20.dp))
+                            .background(heroBrush)
                     ) {
                         Column(
                             modifier = Modifier
@@ -489,9 +500,9 @@ fun DashboardScreen(
                                     else -> "RUNNING BALANCE"
                                 }
                                 val statusColor = when {
-                                    runningVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.error
-                                    runningVal > BigDecimal.ZERO -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    runningVal < BigDecimal.ZERO -> Color(0xFFFCA5A5)
+                                    runningVal > BigDecimal.ZERO -> Color(0xFF6EE7B7)
+                                    else -> Color.White.copy(alpha = 0.72f)
                                 }
                                 Text(
                                     text = statusText,
@@ -500,8 +511,8 @@ fun DashboardScreen(
                                 )
                                 Surface(
                                     shape = RoundedCornerShape(99.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                                    color = Color.White.copy(alpha = 0.12f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.16f))
                                 ) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         IconButton(
@@ -511,12 +522,14 @@ fun DashboardScreen(
                                             Icon(
                                                 Icons.AutoMirrored.Filled.KeyboardArrowLeft,
                                                 contentDescription = "Previous Month",
+                                                tint = Color.White,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
                                         Text(
                                             text = state.selectedMonth.format(monthFormatter),
                                             style = MaterialTheme.typography.labelLarge,
+                                            color = Color.White,
                                             modifier = Modifier.padding(horizontal = 4.dp)
                                         )
                                         IconButton(
@@ -526,6 +539,7 @@ fun DashboardScreen(
                                             Icon(
                                                 Icons.AutoMirrored.Filled.KeyboardArrowRight,
                                                 contentDescription = "Next Month",
+                                                tint = Color.White,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
@@ -537,9 +551,9 @@ fun DashboardScreen(
                             val runningVal = state.monthlySpending?.cumulativeBalance?.toBigDecimalOrNull() ?: BigDecimal.ZERO
                             val runningPrefix = if (runningVal > BigDecimal.ZERO) "+" else ""
                             val runningColor = when {
-                                runningVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.error
-                                runningVal > BigDecimal.ZERO -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurface
+                                runningVal < BigDecimal.ZERO -> Color(0xFFFCA5A5)
+                                runningVal > BigDecimal.ZERO -> Color(0xFF6EE7B7)
+                                else -> Color.White
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -562,70 +576,74 @@ fun DashboardScreen(
                                     },
                                     enabled = canZero,
                                     shape = RoundedCornerShape(99.dp),
-                                    color = when {
-                                        !canZero -> MaterialTheme.colorScheme.surfaceVariant
-                                        runningVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.errorContainer
-                                        else -> MaterialTheme.colorScheme.primaryContainer
-                                    },
-                                    border = BorderStroke(
-                                        1.5.dp,
-                                        when {
-                                            !canZero -> MaterialTheme.colorScheme.outline
-                                            runningVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.error
-                                            else -> MaterialTheme.colorScheme.primary
-                                        }
-                                    )
+                                    color = Color.White.copy(alpha = if (canZero) 0.16f else 0.06f),
+                                    border = BorderStroke(1.dp, Color.White.copy(alpha = if (canZero) 0.28f else 0.1f))
                                 ) {
                                     Text(
                                         text = "Zero Out",
                                         style = MaterialTheme.typography.labelLarge,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = when {
-                                            !canZero -> MaterialTheme.colorScheme.onSurfaceVariant
-                                            runningVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.onErrorContainer
-                                            else -> MaterialTheme.colorScheme.onPrimaryContainer
-                                        },
+                                        color = Color.White.copy(alpha = if (canZero) 1f else 0.45f),
                                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
                                     )
                                 }
                             }
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
                             val carryVal = state.monthlySpending?.carryForwardBalance?.toBigDecimalOrNull() ?: BigDecimal.ZERO
                             val carryPrefix = if (carryVal > BigDecimal.ZERO) "+" else ""
                             val carryColor = when {
-                                carryVal < BigDecimal.ZERO -> MaterialTheme.colorScheme.error
-                                carryVal > BigDecimal.ZERO -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurface
+                                carryVal < BigDecimal.ZERO -> Color(0xFFFCA5A5)
+                                carryVal > BigDecimal.ZERO -> Color(0xFF6EE7B7)
+                                else -> Color.White
                             }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(16.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Column {
-                                    Text("Carryover", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(
-                                        text = maskAmt("$carryPrefix${formatAmount(state.monthlySpending?.carryForwardBalance ?: "0")}"),
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = carryColor
-                                    )
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.09f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                        Text("Carryover", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.68f))
+                                        Text(
+                                            text = maskAmt("$carryPrefix${formatAmount(state.monthlySpending?.carryForwardBalance ?: "0")}"),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = carryColor
+                                        )
+                                    }
                                 }
-                                Column {
-                                    Text("Debit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(
-                                        text = maskAmt("-${formatAmount(state.monthlySpending?.totalSpent ?: "0")}"),
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.09f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                        Text("Debit", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.68f))
+                                        Text(
+                                            text = maskAmt("-${formatAmount(state.monthlySpending?.totalSpent ?: "0")}"),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFFFCA5A5)
+                                        )
+                                    }
                                 }
-                                Column {
-                                    Text("Credit", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(
-                                        text = maskAmt("+${formatAmount(state.monthlySpending?.totalCredit ?: "0")}"),
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                                Surface(
+                                    color = Color.White.copy(alpha = 0.09f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                        Text("Credit", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.68f))
+                                        Text(
+                                            text = maskAmt("+${formatAmount(state.monthlySpending?.totalCredit ?: "0")}"),
+                                            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color(0xFF6EE7B7)
+                                        )
+                                    }
                                 }
                             }
                             // Safe to Spend Today Pacing Gauge (#3)
@@ -2124,6 +2142,56 @@ fun DashboardScreen(
                 // v1.9.0: Duplicate Transaction Scanner Card — More tab
                 if (selectedTab == 3) {
                     item {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "ACCENT PALETTE",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    listOf(
+                                        "forest" to Color(0xFF0D5C4B),
+                                        "ocean" to Color(0xFF1D4ED8),
+                                        "indigo" to Color(0xFF4338CA),
+                                        "terracotta" to Color(0xFFB45309),
+                                        "obsidian" to Color(0xFF18181B)
+                                    ).forEach { (key, swatch) ->
+                                        val selected = state.accentPalette == key
+                                        Box(
+                                            modifier = Modifier
+                                                .size(32.dp)
+                                                .clip(CircleShape)
+                                                .background(swatch)
+                                                .clickable { onSelectAccentPalette(key) },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (selected) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(10.dp)
+                                                        .clip(CircleShape)
+                                                        .background(Color.White)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item {
                         BillSplitAndCsvCard(
                             baseCurrency = baseCurrency,
                             onLogBillSplit = onLogBillSplit,
@@ -2423,8 +2491,13 @@ private fun CategoryBreakdownRow(
     totalSpent: BigDecimal
 ) {
     val catVal = category.totalSpent.toBigDecimalOrNull() ?: BigDecimal.ZERO
-    val progress = (catVal.toFloat() / totalSpent.toFloat()).coerceIn(0f, 1f)
-    val pct = (progress * 100).toInt()
+    val targetProgress = (catVal.toFloat() / totalSpent.toFloat()).coerceIn(0f, 1f)
+    val animatedProgress by animateFloatAsState(
+        targetValue = targetProgress,
+        animationSpec = tween(durationMillis = 500),
+        label = "catProgress"
+    )
+    val pct = (targetProgress * 100).toInt()
     val accent = categoryAccentColor(category.categoryName)
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -2435,14 +2508,22 @@ private fun CategoryBreakdownRow(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Box(
                     modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(accent)
-                )
+                        .size(28.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(accent.copy(alpha = 0.14f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = categoryIcon(category.categoryName),
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
                 Text(
                     text = category.categoryName,
                     style = MaterialTheme.typography.bodyMedium,
@@ -2457,7 +2538,7 @@ private fun CategoryBreakdownRow(
         }
         Spacer(modifier = Modifier.height(6.dp))
         LinearProgressIndicator(
-            progress = { progress },
+            progress = { animatedProgress },
             color = accent,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,
             strokeCap = StrokeCap.Round,
@@ -2485,10 +2566,18 @@ private fun TransactionRow(tx: TransactionRecord, baseCurrency: String, privacyM
         ) {
             Box(
                 modifier = Modifier
-                    .size(10.dp)
-                    .clip(CircleShape)
-                    .background(accent)
-            )
+                    .size(38.dp)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(accent.copy(alpha = 0.13f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = categoryIcon(tx.categoryName),
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp)
+                )
+            }
             Column {
                 Text(
                     text = buildString {

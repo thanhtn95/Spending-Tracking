@@ -46,6 +46,13 @@ class TokenStore(context: Context) {
         prefs.edit().putString(KEY_THEME, mode).apply()
     }
 
+    /** "forest", "ocean", "indigo", "terracotta", or "obsidian" */
+    fun getAccentPalette(): String = prefs.getString(KEY_ACCENT, "forest") ?: "forest"
+
+    fun setAccentPalette(palette: String) {
+        prefs.edit().putString(KEY_ACCENT, palette).apply()
+    }
+
     fun isPrivacyMode(): Boolean = prefs.getBoolean(KEY_PRIVACY, false)
 
     fun setPrivacyMode(enabled: Boolean) {
@@ -78,6 +85,7 @@ class TokenStore(context: Context) {
     companion object {
         private const val PREFS_NAME = "spending_tracker_auth"
         private const val KEY_TOKEN = "jwt_access_token"
+        private const val KEY_ACCENT = "accent_palette"
         private const val KEY_EMAIL = "user_email"
         private const val KEY_BIOMETRIC = "biometric_lock_enabled"
         private const val KEY_THEME = "theme_mode"

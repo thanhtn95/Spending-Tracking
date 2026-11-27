@@ -1,5 +1,5 @@
-const CACHE_NAME = "spending-tracker-v210";
-const SHELL_ASSETS = ["/", "/assets/styles.css?v=2.1.0", "/assets/app.js?v=2.1.0", "/manifest.webmanifest"];
+const CACHE_NAME = "spending-tracker-v220";
+const SHELL_ASSETS = ["/", "/assets/styles.css?v=2.2.0", "/assets/app.js?v=2.2.0", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

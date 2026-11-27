@@ -639,6 +639,14 @@
       renderRules(state.rules);
       syncTagFilter(state.tags);
       state.transactions = txs || [];
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const todaySpentEl = document.getElementById("today-spent");
+      if (todaySpentEl) {
+        const todaySum = state.transactions
+          .filter((t) => t.tx_date === todayIso && !t.is_transfer && (t.tx_type || "debit") === "debit")
+          .reduce((acc, t) => acc + Number(t.base_amount ?? t.amount ?? 0), 0);
+        todaySpentEl.textContent = todaySum > 0 ? `-${formatNumber(todaySum)}` : "0";
+      }
       renderTransactions();
       renderCalendarHeatmap(state.transactions);
       renderTrend(trend || []);

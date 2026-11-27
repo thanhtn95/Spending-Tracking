@@ -647,6 +647,62 @@ fun DashboardScreen(
                     }
                 }
 
+                // Today's Spending Card (Home tab)
+                item {
+                    val todayIso = remember { LocalDate.now().toString() }
+                    val todayTxs = remember(state.transactions, todayIso) {
+                        state.transactions.filter { tx ->
+                            tx.txDate == todayIso && !tx.isTransfer && tx.txType.equals("debit", ignoreCase = true)
+                        }
+                    }
+                    val todayTotal = remember(todayTxs) {
+                        todayTxs.fold(BigDecimal.ZERO) { acc, tx ->
+                            acc + ((tx.baseAmount ?: tx.amount).toBigDecimalOrNull() ?: BigDecimal.ZERO)
+                        }
+                    }
+                    val isZeroToday = todayTotal.compareTo(BigDecimal.ZERO) == 0
+                    Card(
+                        onClick = {
+                            searchQuery = todayIso
+                            selectedTab = 1
+                        },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 14.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "TODAY'S SPENDING",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = if (isZeroToday) "No spend today" else "${todayTxs.size} transaction${if (todayTxs.size == 1) "" else "s"} · tap to view",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                text = maskAmt(
+                                    if (isZeroToday) "0 $baseCurrency"
+                                    else "-${formatAmount(todayTotal.stripTrailingZeros().toPlainString())} $baseCurrency"
+                                ),
+                                style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                                fontWeight = FontWeight.Bold,
+                                color = if (isZeroToday) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
+                }
+
                 // Natural-Language Quick Input + Voice Mic (#1 & #2, 100% local, 0 AI calls)
                 item {
                     Row(

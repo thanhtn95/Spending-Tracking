@@ -198,4 +198,16 @@ interface SpendingApiService {
     suspend fun createNotificationDraft(
         @Body request: CreateDraftNotificationRequest
     ): Response<TransactionRecord>
+
+    // Month-over-Month Comparison & Bulk Actions
+    @GET("api/v1/spending/comparison")
+    suspend fun getMonthlyComparison(
+        @Query("year") year: Int,
+        @Query("month") month: Int
+    ): Response<MonthlyComparisonResponse>
+
+    @POST("api/v1/transactions/bulk")
+    suspend fun bulkTransactions(
+        @Body request: BulkTransactionsRequest
+    ): Response<BulkTransactionsResponse>
 }

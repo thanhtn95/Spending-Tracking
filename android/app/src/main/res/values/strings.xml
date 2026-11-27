@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Spending Tracker</string>
+    <string name="shortcut_scan_short">Scan Bill</string>
+    <string name="shortcut_scan_long">Scan Paper Receipt</string>
+    <string name="shortcut_add_short">Quick Add</string>
+    <string name="shortcut_add_long">Add Transaction</string>
 </resources>

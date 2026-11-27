@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.spendingtracker.app.data.ApiClient
 import com.spendingtracker.app.data.BudgetRecord
+import com.spendingtracker.app.data.BulkTransactionsRequest
 import com.spendingtracker.app.data.ConfirmTransactionItem
 import com.spendingtracker.app.data.ConfirmTransactionsRequest
 import com.spendingtracker.app.data.CreateCategoryRequest
@@ -21,12 +22,14 @@ import com.spendingtracker.app.data.IouRecord
 import com.spendingtracker.app.data.LoginRequest
 import com.spendingtracker.app.data.MediaUtils
 import com.spendingtracker.app.data.MerchantRuleRecord
+import com.spendingtracker.app.data.MonthlyComparisonResponse
 import com.spendingtracker.app.data.MonthlySpendingResponse
 import com.spendingtracker.app.data.MonthlyTrendPoint
 import com.spendingtracker.app.data.OfflineQueue
 import com.spendingtracker.app.data.QuickInputParser
 import com.spendingtracker.app.data.QuickTemplateRecord
 import com.spendingtracker.app.data.RangeSpendingResponse
+import com.spendingtracker.app.data.RecurringBillItem
 import com.spendingtracker.app.data.RecurringSummaryResponse
 import com.spendingtracker.app.data.RegisterRequest
 import com.spendingtracker.app.data.SplitItemRequest
@@ -73,6 +76,7 @@ data class UiState(
     val rangeEnd: String? = null,
     val rangeSummary: RangeSpendingResponse? = null,
     val monthlySpending: MonthlySpendingResponse? = null,
+    val comparison: MonthlyComparisonResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -210,6 +214,57 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun bulkDeleteTransactions(ids: List<String>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.bulkTransactions(BulkTransactionsRequest(ids = ids, action = "delete"))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Deleted ${res.body()?.affectedCount ?: ids.size} transaction(s)") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Bulk delete failed") }
+            }
+        }
+    }
+
+    fun bulkUpdateCategory(ids: List<String>, categoryName: String) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.bulkTransactions(
+                    BulkTransactionsRequest(ids = ids, action = "update", categoryName = categoryName)
+                )
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Updated ${res.body()?.affectedCount ?: ids.size} transaction(s) → $categoryName") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Bulk update failed") }
+            }
+        }
+    }
+
+    fun logRecurringBillNow(bill: RecurringBillItem) {
+        createManualTransaction(
+            txDate = java.time.LocalDate.now().toString(),
+            vendor = bill.vendor,
+            amount = bill.avgAmount,
+            txType = "debit",
+            currency = bill.currency,
+            categoryName = bill.categoryName,
+            description = "Recurring bill",
+            isRecurring = true
+        )
+    }
+
     fun login(email: String, password: String) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, errorMessage = null) }
@@ -319,6 +374,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 val templatesRes = api.getTemplates()
                 val rulesRes = api.getRules()
                 val tagsRes = api.getTags()
+                val compRes = api.getMonthlyComparison(ym.year, ym.monthValue)
 
                 if (summaryRes.code() == 401 || txRes.code() == 401) {
                     logout()
@@ -340,6 +396,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         it.copy(
                             isLoading = false,
                             monthlySpending = summaryBody,
+                            comparison = if (compRes.isSuccessful) compRes.body() else it.comparison,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
                             transactions = txRes.body().orEmpty(),
                             wallets = if (walletsRes.isSuccessful) walletsRes.body().orEmpty() else it.wallets,

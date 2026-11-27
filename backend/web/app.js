@@ -48,6 +48,7 @@
     templates: [],
     rules: [],
     tags: [],
+    selectedTxIds: new Set(),
     rangeMode: false,
     rangeStart: null,
     rangeEnd: null,
@@ -216,6 +217,19 @@
   const btnCloseSplit = document.getElementById("btn-close-split");
   const btnCancelSplit = document.getElementById("btn-cancel-split");
   const btnConfirmSplit = document.getElementById("btn-confirm-split");
+  const savingsRateBadge = document.getElementById("savings-rate-badge");
+  const noSpendStreakBadge = document.getElementById("nospend-streak-badge");
+  const momChangesList = document.getElementById("mom-changes-list");
+  const topMerchantsList = document.getElementById("top-merchants-list");
+  const bulkBar = document.getElementById("bulk-bar");
+  const bulkCountEl = document.getElementById("bulk-count");
+  const bulkSelectAll = document.getElementById("bulk-select-all");
+  const bulkCategoryEl = document.getElementById("bulk-category");
+  const bulkWalletEl = document.getElementById("bulk-wallet");
+  const bulkTagEl = document.getElementById("bulk-tag");
+  const btnBulkApply = document.getElementById("btn-bulk-apply");
+  const btnBulkDelete = document.getElementById("btn-bulk-delete");
+  const btnBulkClear = document.getElementById("btn-bulk-clear");
   let splittingTx = null;
   const addForm = document.getElementById("add-form");
   const addTypeEl = document.getElementById("add-type");
@@ -370,6 +384,7 @@
     if (budgetCategoryEl) budgetCategoryEl.innerHTML = html;
     if (addCategoryEl) addCategoryEl.innerHTML = html;
     if (ruleCategoryEl) ruleCategoryEl.innerHTML = html;
+    if (bulkCategoryEl) bulkCategoryEl.innerHTML = `<option value="">Keep Category</option>` + html;
     if (txCategoryFilter) {
       const prev = txCategoryFilter.value || "all";
       txCategoryFilter.innerHTML = `<option value="all">All Categories</option>` + html;
@@ -506,7 +521,7 @@
       ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
       : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
     try {
-      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags] = await Promise.all([
+      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison] = await Promise.all([
         apiFetch(`/api/v1/spending/monthly?${q}`),
         apiFetch(txUrl),
         apiFetch(`/api/v1/spending/trend?months=6`),
@@ -518,13 +533,17 @@
         apiFetch(`/api/v1/templates`),
         apiFetch(`/api/v1/rules`),
         apiFetch(`/api/v1/tags`),
+        apiFetch(`/api/v1/spending/comparison?${q}`),
       ]);
       state.baseCurrency = summary?.base_currency || "VND";
       state.wallets = wallets || [];
       state.templates = templates || [];
       state.rules = rules || [];
       state.tags = tags || [];
+      state.selectedTxIds.clear();
+      syncBulkBar();
       renderSummary(summary);
+      renderComparison(comparison);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
       renderRules(state.rules);
@@ -861,6 +880,9 @@
       const prev = addWalletEl.value;
       addWalletEl.innerHTML = `<option value="">None</option>` + opts;
       addWalletEl.value = prev;
+    }
+    if (bulkWalletEl) {
+      bulkWalletEl.innerHTML = `<option value="">Keep Wallet</option>` + opts;
     }
     if (txWalletFilter) {
       const prev = txWalletFilter.value || "all";
@@ -1268,6 +1290,120 @@
     }
   });
 
+  // --- MoM Comparison, Top Merchants, Savings Rate & No-Spend Streak (#2 & #3) ---
+  function renderComparison(comp) {
+    if (!comp) return;
+    if (savingsRateBadge) {
+      savingsRateBadge.textContent = comp.savings_rate_pct != null
+        ? `Savings Rate: ${comp.savings_rate_pct}%`
+        : "Savings Rate: —";
+    }
+    if (noSpendStreakBadge) {
+      noSpendStreakBadge.textContent = `No-spend: ${comp.no_spend_days}d · Streak: ${comp.current_no_spend_streak}d`;
+    }
+    if (momChangesList) {
+      const changes = comp.category_changes || [];
+      if (!changes.length) {
+        momChangesList.innerHTML = `<div class="empty-block">No month-over-month data yet.</div>`;
+      } else {
+        momChangesList.innerHTML = changes.slice(0, 6).map((c) => {
+          const diff = Number(c.diff || 0);
+          const pctStr = c.pct_change != null ? ` (${c.pct_change > 0 ? "+" : ""}${c.pct_change}%)` : "";
+          const cls = diff > 0 ? "text-debt" : (diff < 0 ? "text-credit" : "");
+          return `
+            <div class="mom-row">
+              <span>${escapeHtml(c.category_name)}</span>
+              <span class="mono ${cls}">${diff > 0 ? "+" : ""}${formatNumber(diff)}${pctStr}</span>
+            </div>`;
+        }).join("");
+      }
+    }
+    if (topMerchantsList) {
+      const merchants = comp.top_merchants || [];
+      if (!merchants.length) {
+        topMerchantsList.innerHTML = `<div class="empty-block">No spending merchants this month.</div>`;
+      } else {
+        topMerchantsList.innerHTML = merchants.map((m) => `
+          <div class="mom-row">
+            <span>${escapeHtml(m.vendor)} <span class="muted">(${m.transaction_count}x)</span></span>
+            <span class="mono">${formatNumber(m.total_spent)} ${escapeHtml(comp.base_currency)}</span>
+          </div>`).join("");
+      }
+    }
+  }
+
+  // --- Bulk Selection & Actions (#4) ---
+  function syncBulkBar() {
+    if (!bulkBar) return;
+    const count = state.selectedTxIds.size;
+    bulkBar.classList.toggle("hidden", count === 0);
+    if (bulkCountEl) bulkCountEl.textContent = `${count} selected`;
+    if (bulkSelectAll && count === 0) bulkSelectAll.checked = false;
+  }
+
+  if (bulkSelectAll) {
+    bulkSelectAll.addEventListener("change", () => {
+      const checks = Array.from(txTbody.querySelectorAll(".tx-bulk-check"));
+      checks.forEach((cb) => {
+        cb.checked = bulkSelectAll.checked;
+        if (cb.checked) state.selectedTxIds.add(cb.dataset.bulkId);
+        else state.selectedTxIds.delete(cb.dataset.bulkId);
+      });
+      syncBulkBar();
+    });
+  }
+
+  if (btnBulkClear) {
+    btnBulkClear.addEventListener("click", () => {
+      state.selectedTxIds.clear();
+      txTbody.querySelectorAll(".tx-bulk-check").forEach((cb) => { cb.checked = false; });
+      syncBulkBar();
+    });
+  }
+
+  if (btnBulkApply) {
+    btnBulkApply.addEventListener("click", async () => {
+      const ids = Array.from(state.selectedTxIds);
+      if (!ids.length) return;
+      try {
+        const res = await apiFetch("/api/v1/transactions/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ids,
+            action: "update",
+            category_name: bulkCategoryEl.value || null,
+            wallet_id: bulkWalletEl.value || null,
+            add_tag: bulkTagEl.value.trim() || null,
+          }),
+        });
+        bulkTagEl.value = "";
+        showToast(`Updated ${res.affected_count} transaction(s).`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+
+  if (btnBulkDelete) {
+    btnBulkDelete.addEventListener("click", async () => {
+      const ids = Array.from(state.selectedTxIds);
+      if (!ids.length || !confirm(`Delete ${ids.length} selected transaction(s)?`)) return;
+      try {
+        const res = await apiFetch("/api/v1/transactions/bulk", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids, action: "delete" }),
+        });
+        showToast(`Deleted ${res.affected_count} transaction(s).`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+
   function renderRecurring(data) {
     const total = Number(data?.monthly_fixed_total || 0);
     const cur = data?.base_currency || state.baseCurrency;
@@ -1277,16 +1413,51 @@
       recurringListEl.innerHTML = `<div class="empty-block">No recurring bills detected yet. Mark any transaction as recurring or upload 2+ months of statements.</div>`;
       return;
     }
-    recurringListEl.innerHTML = items.map((item) => `
+    recurringListEl.innerHTML = items.map((item, idx) => `
       <div class="recurring-card">
         <div class="recurring-top">
           <span>${escapeHtml(item.vendor)}</span>
           <span class="mono">${formatNumber(item.avg_amount)} ${escapeHtml(item.currency)}</span>
         </div>
-        <div class="muted" style="font-size:0.78rem;">
-          ${escapeHtml(item.category_name)} · Next est: <span class="mono">${escapeHtml(item.next_expected_date)}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;gap:6px;">
+          <span class="muted" style="font-size:0.78rem;">
+            ${escapeHtml(item.category_name)} · Next: <span class="mono">${escapeHtml(item.next_expected_date)}</span>
+          </span>
+          <button class="btn btn-ghost btn-sm" type="button" data-log-bill="${idx}">Log Now</button>
         </div>
       </div>`).join("");
+    state.recurringItems = items;
+  }
+
+  if (recurringListEl) {
+    recurringListEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-log-bill]");
+      if (!btn) return;
+      const item = (state.recurringItems || [])[Number(btn.dataset.logBill)];
+      if (!item) return;
+      btn.disabled = true;
+      try {
+        await apiFetch("/api/v1/transactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tx_date: new Date().toISOString().slice(0, 10),
+            vendor: item.vendor,
+            category_name: item.category_name,
+            amount: String(item.avg_amount),
+            currency: item.currency || state.baseCurrency || "VND",
+            tx_type: "debit",
+            is_recurring: true,
+          }),
+        });
+        showToast(`Logged recurring bill: ${item.vendor}`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   function renderTrend(points) {
@@ -1454,7 +1625,7 @@
     });
 
     if (!filtered.length) {
-      txTbody.innerHTML = `<tr><td colspan="7" class="empty-cell">No transactions match this filter.</td></tr>`;
+      txTbody.innerHTML = `<tr><td colspan="8" class="empty-cell">No transactions match this filter.</td></tr>`;
       return;
     }
 
@@ -1474,7 +1645,7 @@
       }, 0);
       htmlParts.push(`
         <tr class="date-group-row">
-          <td colspan="5">${escapeHtml(formatDateHeading(dateKey))}</td>
+          <td colspan="6">${escapeHtml(formatDateHeading(dateKey))}</td>
           <td class="num ${dayNet < 0 ? "text-debt" : (dayNet > 0 ? "text-credit" : "")}" colspan="2">
             ${dayNet > 0 ? "+" : ""}${formatNumber(dayNet)} ${escapeHtml(state.baseCurrency)}
           </td>
@@ -1490,8 +1661,10 @@
         const fxHint = t.base_amount && t.currency && t.currency !== state.baseCurrency
           ? `<div class="muted mono" style="font-size:0.74rem;">≈ ${formatNumber(t.base_amount)} ${escapeHtml(state.baseCurrency)}</div>`
           : "";
+        const checked = state.selectedTxIds.has(t.id) ? "checked" : "";
         htmlParts.push(`
           <tr>
+            <td><input class="tx-bulk-check" type="checkbox" data-bulk-id="${escapeHtml(t.id)}" ${checked} /></td>
             <td class="mono" style="font-size:0.83rem;color:var(--muted);white-space:nowrap;">${escapeHtml(t.tx_date)}</td>
             <td>
               <div style="font-weight:500;">
@@ -1531,6 +1704,14 @@
   }
 
   // Edit & Delete transaction click delegation
+  txTbody.addEventListener("change", (e) => {
+    const cb = e.target.closest(".tx-bulk-check");
+    if (!cb) return;
+    if (cb.checked) state.selectedTxIds.add(cb.dataset.bulkId);
+    else state.selectedTxIds.delete(cb.dataset.bulkId);
+    syncBulkBar();
+  });
+
   txTbody.addEventListener("click", async (e) => {
     const editBtn = e.target.closest("[data-edit-id]");
     if (editBtn) {

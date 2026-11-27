@@ -252,6 +252,31 @@
 
       <!-- TAB: PLANNING -->
       <div data-tab-panel="planning" class="hidden">
+      <!-- Monthly Highlights: Savings Rate, No-Spend Streak, MoM & Top Merchants (#2 & #3) -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Monthly Highlights &amp; vs. Last Month</h2>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <span id="savings-rate-badge" class="badge-subtle mono">Savings: —</span>
+            <span id="nospend-streak-badge" class="badge-subtle mono">No-spend: 0d</span>
+          </div>
+        </div>
+        <div class="mom-grid">
+          <div>
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:8px;">BIGGEST CATEGORY CHANGES (MoM)</div>
+            <div id="mom-changes-list" style="display:flex;flex-direction:column;gap:6px;">
+              <div class="empty-block">No comparison data yet.</div>
+            </div>
+          </div>
+          <div>
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:8px;">TOP 5 MERCHANTS</div>
+            <div id="top-merchants-list" style="display:flex;flex-direction:column;gap:6px;">
+              <div class="empty-block">No merchants this month.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <!-- Analytics Row: 6-Month Cash Flow Trend + Monthly Budgets -->
       <div class="grid-main">
         <section class="card">
@@ -436,10 +461,26 @@
           <span id="range-summary" class="badge-subtle mono" style="margin-left:auto;"></span>
         </div>
 
+        <!-- Bulk Action Bar (#4) -->
+        <div id="bulk-bar" class="bulk-bar hidden">
+          <strong id="bulk-count" style="font-size:0.85rem;">0 selected</strong>
+          <select id="bulk-category" aria-label="Bulk set category">
+            <option value="">Keep Category</option>
+          </select>
+          <select id="bulk-wallet" aria-label="Bulk set wallet">
+            <option value="">Keep Wallet</option>
+          </select>
+          <input id="bulk-tag" type="text" placeholder="Add #tag (optional)" style="width:140px;" />
+          <button id="btn-bulk-apply" class="btn btn-primary btn-sm" type="button">Apply</button>
+          <button id="btn-bulk-delete" class="btn btn-danger-ghost btn-sm" type="button">Delete</button>
+          <button id="btn-bulk-clear" class="btn btn-ghost btn-sm" type="button" style="margin-left:auto;">Clear</button>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
+                <th style="width:30px;"><input id="bulk-select-all" type="checkbox" aria-label="Select all" /></th>
                 <th>Date</th>
                 <th>Merchant</th>
                 <th>Category</th>
@@ -450,7 +491,7 @@
               </tr>
             </thead>
             <tbody id="tx-tbody">
-              <tr><td colspan="7" class="empty-cell">Loading ledger...</td></tr>
+              <tr><td colspan="8" class="empty-cell">Loading ledger...</td></tr>
             </tbody>
           </table>
         </div>

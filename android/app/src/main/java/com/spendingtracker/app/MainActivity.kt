@@ -107,6 +107,31 @@ class MainActivity : FragmentActivity() {
     private var widgetLaunchAction by mutableStateOf<String?>(null)
 
     // 4. Backup JSON Export & Import launchers
+    private val voiceLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val matches = result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)
+            val spoken = matches?.firstOrNull()?.trim()
+            if (!spoken.isNullOrBlank()) {
+                viewModel.logNaturalQuickInput(spoken)
+            }
+        }
+    }
+
+    private fun launchVoiceQuickLog() {
+        val intent = Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(
+                android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "Say e.g. \"50k coffee cash\"")
+        }
+        runCatching { voiceLauncher.launch(intent) }.onFailure {
+            Toast.makeText(this, "Voice recognition unavailable on this device", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private val exportBackupLauncher = registerForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
     ) { uri ->
@@ -264,6 +289,10 @@ class MainActivity : FragmentActivity() {
                         onCycleThemeClick = { viewModel.cycleThemeMode() },
                         onTogglePrivacy = { viewModel.togglePrivacyMode() },
                         onQuickLogSubmit = { raw -> viewModel.logNaturalQuickInput(raw) },
+                        onVoiceQuickLogClick = { launchVoiceQuickLog() },
+                        onLogRecurringClick = { bill -> viewModel.logRecurringBillNow(bill) },
+                        onBulkDeleteClick = { ids -> viewModel.bulkDeleteTransactions(ids) },
+                        onBulkCategoryClick = { ids, cat -> viewModel.bulkUpdateCategory(ids, cat) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

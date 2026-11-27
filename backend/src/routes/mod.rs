@@ -156,6 +156,14 @@ pub fn build_router(state: AppState) -> Router {
             get(extras::range_spending),
         )
         .route(
+            "/api/v1/spending/comparison",
+            get(extras::monthly_comparison),
+        )
+        .route(
+            "/api/v1/transactions/bulk",
+            post(extras::bulk_transactions),
+        )
+        .route(
             "/api/v1/tags",
             get(extras::list_tags),
         )

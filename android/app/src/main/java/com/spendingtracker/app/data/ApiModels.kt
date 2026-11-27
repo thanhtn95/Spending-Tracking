@@ -373,6 +373,43 @@ data class CreateDraftNotificationRequest(
     val currency: String = "VND"
 )
 
+data class CategoryMomChange(
+    @SerializedName("category_name") val categoryName: String,
+    @SerializedName("current_spent") val currentSpent: String,
+    @SerializedName("previous_spent") val previousSpent: String,
+    val diff: String,
+    @SerializedName("pct_change") val pctChange: Double?
+)
+
+data class TopMerchantItem(
+    val vendor: String,
+    @SerializedName("total_spent") val totalSpent: String,
+    @SerializedName("transaction_count") val transactionCount: Long
+)
+
+data class MonthlyComparisonResponse(
+    val year: Int,
+    val month: Int,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("savings_rate_pct") val savingsRatePct: Double?,
+    @SerializedName("no_spend_days") val noSpendDays: Long,
+    @SerializedName("current_no_spend_streak") val currentNoSpendStreak: Long,
+    @SerializedName("category_changes") val categoryChanges: List<CategoryMomChange>,
+    @SerializedName("top_merchants") val topMerchants: List<TopMerchantItem>
+)
+
+data class BulkTransactionsRequest(
+    val ids: List<String>,
+    val action: String,
+    @SerializedName("category_name") val categoryName: String? = null,
+    @SerializedName("wallet_id") val walletId: String? = null,
+    @SerializedName("add_tag") val addTag: String? = null
+)
+
+data class BulkTransactionsResponse(
+    @SerializedName("affected_count") val affectedCount: Int
+)
+
 // --- Error ---
 
 data class ApiErrorEnvelope(

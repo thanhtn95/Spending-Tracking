@@ -606,3 +606,47 @@ pub struct CreateDraftNotificationRequest {
     pub tx_type: Option<String>,
     pub currency: Option<String>,
 }
+
+// --- Month-over-Month Comparison, Top Merchants, Savings Rate & Bulk Actions ---
+
+#[derive(Debug, Serialize)]
+pub struct CategoryMomChange {
+    pub category_name: String,
+    pub current_spent: Decimal,
+    pub previous_spent: Decimal,
+    pub diff: Decimal,
+    pub pct_change: Option<f64>,
+}
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct TopMerchantItem {
+    pub vendor: String,
+    pub total_spent: Decimal,
+    pub transaction_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonthlyComparisonResponse {
+    pub year: i32,
+    pub month: u32,
+    pub base_currency: String,
+    pub savings_rate_pct: Option<f64>,
+    pub no_spend_days: i64,
+    pub current_no_spend_streak: i64,
+    pub category_changes: Vec<CategoryMomChange>,
+    pub top_merchants: Vec<TopMerchantItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkTransactionsRequest {
+    pub ids: Vec<Uuid>,
+    pub action: String, // "update" or "delete"
+    pub category_name: Option<String>,
+    pub wallet_id: Option<Uuid>,
+    pub add_tag: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkTransactionsResponse {
+    pub affected_count: usize,
+}

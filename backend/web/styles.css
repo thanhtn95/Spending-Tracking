@@ -277,6 +277,41 @@ body.privacy-mode .badge-subtle.mono {
   margin-bottom: 8px;
 }
 
+/* Bulk Action Bar & MoM Highlights */
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--accent);
+  background: var(--accent-soft);
+}
+.bulk-bar select, .bulk-bar input {
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+.mom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.mom-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  font-size: 0.84rem;
+}
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 body {

@@ -2,11 +2,13 @@ use crate::{
     error::AppError,
     models::{
         BackupBudget, BackupGoal, BackupImportResponse, BackupIou, BackupPayload, BackupRule,
-        BackupTemplate, BackupTransaction, BackupWallet, CategorySpending,
+        BackupTemplate, BackupTransaction, BackupWallet, BulkTransactionsRequest,
+        BulkTransactionsResponse, CategoryMomChange, CategorySpending,
         CreateDraftNotificationRequest, CreateTemplateRequest, CreateWalletRequest,
-        MerchantRuleRecord, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
-        SplitTransactionRequest, TagSpending, TransactionRecord, TransferWalletRequest,
-        TransferWalletResponse, UpsertMerchantRuleRequest, WalletRecord,
+        MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, QuickTemplateRecord,
+        RangeSpendingQuery, RangeSpendingResponse, SplitTransactionRequest, TagSpending,
+        TopMerchantItem, TransactionRecord, TransferWalletRequest, TransferWalletResponse,
+        UpsertMerchantRuleRequest, WalletRecord,
     },
     routes::AppState,
     services::{
@@ -1510,6 +1512,279 @@ pub async fn create_notification_draft(
 
     db_tx.commit().await?;
     Ok((StatusCode::CREATED, Json(record)))
+}
+
+// ================================
+// Month-over-Month Comparison, Top Merchants, Savings Rate & No-Spend Streak (#2 & #3)
+// ================================
+
+pub async fn monthly_comparison(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<MonthlyQuery>,
+) -> Result<Json<MonthlyComparisonResponse>, AppError> {
+    use chrono::{Datelike, NaiveDate};
+    use rust_decimal::prelude::ToPrimitive;
+    use std::collections::{HashMap, HashSet};
+
+    let cur_start = NaiveDate::from_ymd_opt(params.year, params.month, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year/month".to_string()))?;
+    let (next_y, next_m) = if params.month == 12 {
+        (params.year + 1, 1)
+    } else {
+        (params.year, params.month + 1)
+    };
+    let cur_end = NaiveDate::from_ymd_opt(next_y, next_m, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid month rollover".to_string()))?;
+    let (prev_y, prev_m) = if params.month == 1 {
+        (params.year - 1, 12)
+    } else {
+        (params.year, params.month - 1)
+    };
+    let prev_start = NaiveDate::from_ymd_opt(prev_y, prev_m, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid prev month".to_string()))?;
+
+    // Savings rate for current month
+    let (total_spent, total_credit): (Decimal, Decimal) = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(SUM(CASE WHEN tx_type = 'debit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0)
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_date >= $2 AND tx_date < $3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cur_start)
+    .bind(cur_end)
+    .fetch_one(&state.db)
+    .await?;
+
+    let savings_rate_pct = if total_credit > Decimal::ZERO {
+        let rate = ((total_credit - total_spent) / total_credit) * Decimal::from(100);
+        rate.round_dp(1).to_f64()
+    } else {
+        None
+    };
+
+    // Days with any debit spend in current month (for no-spend days & streak)
+    let spend_dates: Vec<NaiveDate> = sqlx::query_scalar(
+        r#"
+        SELECT DISTINCT tx_date
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_type = 'debit' AND tx_date >= $2 AND tx_date < $3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cur_start)
+    .bind(cur_end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let spend_set: HashSet<NaiveDate> = spend_dates.into_iter().collect();
+    let today = Utc::now().date_naive();
+    let last_day_in_month = cur_end - chrono::Duration::days(1);
+    let eval_end = if today < cur_start {
+        cur_start - chrono::Duration::days(1)
+    } else if today < last_day_in_month {
+        today
+    } else {
+        last_day_in_month
+    };
+
+    let mut no_spend_days: i64 = 0;
+    let mut current_no_spend_streak: i64 = 0;
+    if eval_end >= cur_start {
+        let mut d = cur_start;
+        while d <= eval_end {
+            if !spend_set.contains(&d) {
+                no_spend_days += 1;
+            }
+            d += chrono::Duration::days(1);
+        }
+        let mut back = eval_end;
+        while back >= cur_start && !spend_set.contains(&back) {
+            current_no_spend_streak += 1;
+            back -= chrono::Duration::days(1);
+        }
+    }
+
+    // Category spending current vs previous month
+    let cur_cats: Vec<(String, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(c.name, 'Uncategorized') AS name,
+               COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1 AND t.status = 'confirmed' AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit' AND t.tx_date >= $2 AND t.tx_date < $3
+        GROUP BY 1
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cur_start)
+    .bind(cur_end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let prev_cats: Vec<(String, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(c.name, 'Uncategorized') AS name,
+               COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1 AND t.status = 'confirmed' AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit' AND t.tx_date >= $2 AND t.tx_date < $3
+        GROUP BY 1
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(prev_start)
+    .bind(cur_start)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut map: HashMap<String, (Decimal, Decimal)> = HashMap::new();
+    for (name, amt) in cur_cats {
+        map.entry(name).or_insert((Decimal::ZERO, Decimal::ZERO)).0 = amt;
+    }
+    for (name, amt) in prev_cats {
+        map.entry(name).or_insert((Decimal::ZERO, Decimal::ZERO)).1 = amt;
+    }
+
+    let mut category_changes: Vec<CategoryMomChange> = map
+        .into_iter()
+        .map(|(category_name, (cur, prev))| {
+            let diff = cur - prev;
+            let pct_change = if prev > Decimal::ZERO {
+                ((diff / prev) * Decimal::from(100)).round_dp(1).to_f64()
+            } else {
+                None
+            };
+            CategoryMomChange {
+                category_name,
+                current_spent: cur,
+                previous_spent: prev,
+                diff,
+                pct_change,
+            }
+        })
+        .collect();
+    category_changes.sort_by(|a, b| b.diff.abs().cmp(&a.diff.abs()));
+    category_changes.truncate(8);
+
+    // Top 5 debit merchants
+    let top_merchants: Vec<TopMerchantItem> = sqlx::query_as(
+        r#"
+        SELECT
+            MIN(vendor) AS vendor,
+            COALESCE(SUM(COALESCE(base_amount, amount)), 0) AS total_spent,
+            COUNT(*) AS transaction_count
+        FROM transactions
+        WHERE user_id = $1 AND status = 'confirmed' AND is_transfer = FALSE
+          AND tx_type = 'debit' AND tx_date >= $2 AND tx_date < $3
+        GROUP BY LOWER(TRIM(vendor))
+        ORDER BY total_spent DESC
+        LIMIT 5
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cur_start)
+    .bind(cur_end)
+    .fetch_all(&state.db)
+    .await?;
+
+    let _ = today.year(); // keep Datelike used cleanly if needed
+    Ok(Json(MonthlyComparisonResponse {
+        year: params.year,
+        month: params.month,
+        base_currency: state.config.default_currency.clone(),
+        savings_rate_pct,
+        no_spend_days,
+        current_no_spend_streak,
+        category_changes,
+        top_merchants,
+    }))
+}
+
+// ================================
+// Bulk Transaction Actions (#4)
+// ================================
+
+pub async fn bulk_transactions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<BulkTransactionsRequest>,
+) -> Result<Json<BulkTransactionsResponse>, AppError> {
+    if payload.ids.is_empty() {
+        return Err(AppError::BadRequest(
+            "Provide at least one transaction ID".to_string(),
+        ));
+    }
+
+    if payload.action.eq_ignore_ascii_case("delete") {
+        let res = sqlx::query("DELETE FROM transactions WHERE user_id = $1 AND id = ANY($2)")
+            .bind(auth.user_id)
+            .bind(&payload.ids)
+            .execute(&state.db)
+            .await?;
+        return Ok(Json(BulkTransactionsResponse {
+            affected_count: res.rows_affected() as usize,
+        }));
+    }
+
+    if !payload.action.eq_ignore_ascii_case("update") {
+        return Err(AppError::BadRequest(
+            "action must be 'update' or 'delete'".to_string(),
+        ));
+    }
+
+    let mut db_tx = state.db.begin().await?;
+
+    let resolved_cat: Option<Uuid> = if let Some(ref cname) = payload.category_name {
+        if !cname.trim().is_empty() {
+            Some(resolve_category_id(&mut db_tx, Some(cname)).await?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let cleaned_tag: Option<String> = payload
+        .add_tag
+        .as_deref()
+        .and_then(|t| clean_tags(&[t.to_string()]).into_iter().next());
+
+    let res = sqlx::query(
+        r#"
+        UPDATE transactions
+        SET category_id = COALESCE($3, category_id),
+            wallet_id   = COALESCE($4, wallet_id),
+            tags        = CASE
+                            WHEN $5::TEXT IS NOT NULL AND NOT ($5 = ANY(tags))
+                            THEN array_append(tags, $5)
+                            ELSE tags
+                          END
+        WHERE user_id = $1
+          AND id = ANY($2)
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&payload.ids)
+    .bind(resolved_cat)
+    .bind(payload.wallet_id)
+    .bind(&cleaned_tag)
+    .execute(&mut *db_tx)
+    .await?;
+
+    db_tx.commit().await?;
+
+    Ok(Json(BulkTransactionsResponse {
+        affected_count: res.rows_affected() as usize,
+    }))
 }
 
 #[cfg(test)]

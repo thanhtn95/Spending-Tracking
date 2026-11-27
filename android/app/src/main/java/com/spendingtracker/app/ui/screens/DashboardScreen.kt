@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Fingerprint
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
@@ -119,6 +120,10 @@ fun DashboardScreen(
     onCycleThemeClick: () -> Unit,
     onTogglePrivacy: () -> Unit,
     onQuickLogSubmit: (String) -> Unit,
+    onVoiceQuickLogClick: () -> Unit,
+    onLogRecurringClick: (com.spendingtracker.app.data.RecurringBillItem) -> Unit,
+    onBulkDeleteClick: (List<String>) -> Unit,
+    onBulkCategoryClick: (List<String>, String) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -132,6 +137,9 @@ fun DashboardScreen(
 
     var selectedTab by remember { mutableStateOf(0) } // 0=Home, 1=Ledger, 2=Plan, 3=More
     var quickInputText by remember { mutableStateOf("") }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(setOf<String>()) }
+    var bulkCatMenuExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("all") } // all | debit | credit
     var categoryFilter by remember { mutableStateOf<String?>(null) }
@@ -578,7 +586,7 @@ fun DashboardScreen(
                     }
                 }
 
-                // Natural-Language Quick Input (#2, 100% local, 0 AI calls)
+                // Natural-Language Quick Input + Voice Mic (#1 & #2, 100% local, 0 AI calls)
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -588,7 +596,16 @@ fun DashboardScreen(
                         OutlinedTextField(
                             value = quickInputText,
                             onValueChange = { quickInputText = it },
-                            placeholder = { Text("50k coffee cash #work  or  +15m salary", style = MaterialTheme.typography.bodySmall) },
+                            placeholder = { Text("50k coffee cash #work", style = MaterialTheme.typography.bodySmall) },
+                            trailingIcon = {
+                                IconButton(onClick = onVoiceQuickLogClick) {
+                                    Icon(
+                                        imageVector = Icons.Default.Mic,
+                                        contentDescription = "Voice Quick Log",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.weight(1f)
@@ -647,6 +664,93 @@ fun DashboardScreen(
 
                 // 6-Month Cash Flow Trend Chart — Plan tab
                 if (selectedTab == 2) {
+                // Monthly Highlights: Savings Rate, No-Spend Streak, MoM & Top Merchants (#2 & #3)
+                state.comparison?.let { comp ->
+                    item {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = "HIGHLIGHTS & VS. LAST MONTH",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text("Savings Rate", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                            Text(
+                                                text = comp.savingsRatePct?.let { "$it%" } ?: "—",
+                                                style = MaterialTheme.typography.titleMedium,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                            )
+                                        }
+                                    }
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.surfaceVariant,
+                                        shape = RoundedCornerShape(10.dp),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Column(modifier = Modifier.padding(10.dp)) {
+                                            Text("No-Spend Days", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Text(
+                                                text = "${comp.noSpendDays}d (${comp.currentNoSpendStreak}d streak)",
+                                                style = MaterialTheme.typography.titleMedium
+                                            )
+                                        }
+                                    }
+                                }
+                                if (comp.categoryChanges.isNotEmpty()) {
+                                    Text("Biggest Category Changes", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    comp.categoryChanges.take(5).forEach { c ->
+                                        val diffNum = c.diff.toBigDecimalOrNull() ?: BigDecimal.ZERO
+                                        val pctStr = c.pctChange?.let { " (${if (it > 0) "+" else ""}$it%)" } ?: ""
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text(c.categoryName, style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                text = maskAmt("${if (diffNum > BigDecimal.ZERO) "+" else ""}${formatAmount(c.diff)}$pctStr"),
+                                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (diffNum > BigDecimal.ZERO) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+                                if (comp.topMerchants.isNotEmpty()) {
+                                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                                    Text("Top Merchants", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    comp.topMerchants.forEach { m ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("${m.vendor} (${m.transactionCount}x)", style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                text = maskAmt("${formatAmount(m.totalSpent)} ${comp.baseCurrency}"),
+                                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if (state.trend.isNotEmpty()) {
                     item {
                         CashFlowTrendCard(points = state.trend)
@@ -706,11 +810,16 @@ fun DashboardScreen(
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        Text(
-                                            text = formatAmount(bill.avgAmount),
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-                                            fontWeight = FontWeight.SemiBold
-                                        )
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = maskAmt(formatAmount(bill.avgAmount)),
+                                                style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            TextButton(onClick = { onLogRecurringClick(bill) }) {
+                                                Text("Log")
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1145,12 +1254,75 @@ fun DashboardScreen(
                 if (selectedTab == 1) {
                 item {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "LEDGER",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "LEDGER",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            TextButton(
+                                onClick = {
+                                    selectionMode = !selectionMode
+                                    if (!selectionMode) selectedIds = emptySet()
+                                }
+                            ) {
+                                Text(if (selectionMode) "Done (${selectedIds.size})" else "Select")
+                            }
+                        }
+                        if (selectionMode && selectedIds.isNotEmpty()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "${selectedIds.size} selected",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Row {
+                                        Box {
+                                            TextButton(onClick = { bulkCatMenuExpanded = true }) { Text("Category") }
+                                            androidx.compose.material3.DropdownMenu(
+                                                expanded = bulkCatMenuExpanded,
+                                                onDismissRequest = { bulkCatMenuExpanded = false }
+                                            ) {
+                                                state.categories.forEach { c ->
+                                                    androidx.compose.material3.DropdownMenuItem(
+                                                        text = { Text(c) },
+                                                        onClick = {
+                                                            bulkCatMenuExpanded = false
+                                                            onBulkCategoryClick(selectedIds.toList(), c)
+                                                            selectedIds = emptySet()
+                                                            selectionMode = false
+                                                        }
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                onBulkDeleteClick(selectedIds.toList())
+                                                selectedIds = emptySet()
+                                                selectionMode = false
+                                            }
+                                        ) {
+                                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = { searchQuery = it },
@@ -1291,11 +1463,21 @@ fun DashboardScreen(
                             }
                         }
                         items(dayTxs, key = { it.id }) { tx ->
+                            val isSelected = selectedIds.contains(tx.id)
                             Surface(
-                                onClick = { onTransactionClick(tx) },
-                                color = MaterialTheme.colorScheme.surface,
+                                onClick = {
+                                    if (selectionMode) {
+                                        selectedIds = if (isSelected) selectedIds - tx.id else selectedIds + tx.id
+                                    } else {
+                                        onTransactionClick(tx)
+                                    }
+                                },
+                                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
                                 shape = RoundedCornerShape(14.dp),
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                                border = BorderStroke(
+                                    if (isSelected) 1.5.dp else 1.dp,
+                                    if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
                             ) {
                                 TransactionRow(tx = tx, baseCurrency = baseCurrency, privacyMode = state.privacyMode)
                             }

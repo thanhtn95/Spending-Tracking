@@ -266,4 +266,17 @@ interface SpendingApiService {
 
     @GET("api/v1/spending/subscriptions")
     suspend fun getSubscriptionAudit(): Response<SubscriptionAuditResponse>
+
+    // v1.9.0: Single-Request Dashboard Bootstrap & Duplicate Scanner
+    @GET("api/v1/dashboard/bootstrap")
+    suspend fun getDashboardBootstrap(
+        @Query("year") year: Int,
+        @Query("month") month: Int,
+        @Query("start_date") startDate: String? = null,
+        @Query("end_date") endDate: String? = null,
+        @Query("status") status: String = "confirmed"
+    ): Response<DashboardBootstrapResponse>
+
+    @GET("api/v1/transactions/duplicates")
+    suspend fun scanDuplicates(): Response<DuplicateScanResponse>
 }

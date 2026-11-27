@@ -34,16 +34,14 @@ class ReminderWorker(
         val today = LocalDate.now()
 
         try {
-            val summaryRes = api.getMonthlySpending(ym.year, ym.monthValue)
-            if (summaryRes.isSuccessful && summaryRes.body() != null) {
-                val s = summaryRes.body()!!
+            val bootRes = api.getDashboardBootstrap(ym.year, ym.monthValue)
+            if (bootRes.isSuccessful && bootRes.body() != null) {
+                val boot = bootRes.body()!!
+                val s = boot.monthlySpending
                 tokenStore.saveWidgetSnapshot(s.cumulativeBalance, s.totalSpent, s.baseCurrency)
                 com.spendingtracker.app.widget.SpendingWidgetProvider.notifyDataChanged(applicationContext)
-            }
 
-            val budgetsRes = api.getBudgets(ym.year, ym.monthValue)
-            if (budgetsRes.isSuccessful) {
-                budgetsRes.body().orEmpty().forEachIndexed { idx, b ->
+                boot.budgets.forEachIndexed { idx, b ->
                     val limit = b.monthlyLimit.toBigDecimalOrNull() ?: return@forEachIndexed
                     val spent = b.spent.toBigDecimalOrNull() ?: BigDecimal.ZERO
                     if (limit > BigDecimal.ZERO) {

@@ -16,7 +16,7 @@ use axum::{
     Router,
 };
 use sqlx::PgPool;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{compression::CompressionLayer, cors::CorsLayer, trace::TraceLayer};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -205,6 +205,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/spending/subscriptions",
             get(extras::subscription_audit),
         )
+        // v1.9.0: Single-Request Dashboard Bootstrap & Duplicate Scanner
+        .route(
+            "/api/v1/dashboard/bootstrap",
+            get(extras::dashboard_bootstrap),
+        )
+        .route(
+            "/api/v1/transactions/duplicates",
+            get(extras::scan_duplicates),
+        )
         .route(
             "/api/v1/tags",
             get(extras::list_tags),
@@ -220,6 +229,7 @@ pub fn build_router(state: AppState) -> Router {
         )
         // Allow up to 25 MB multipart uploads for multi-page PDFs / batched receipts
         .layer(DefaultBodyLimit::max(25 * 1024 * 1024))
+        .layer(CompressionLayer::new())
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

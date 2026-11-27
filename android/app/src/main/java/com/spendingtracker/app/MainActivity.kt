@@ -328,6 +328,8 @@ class MainActivity : FragmentActivity() {
                         onInspectMerchant = { vendor -> viewModel.loadMerchantProfile(vendor) },
                         onSuggestBudgetsClick = { viewModel.loadBudgetSuggestions() },
                         onApplyBudgetSuggestion = { cat, amt -> viewModel.upsertBudget(cat, amt, false) },
+                        onScanDuplicatesClick = { viewModel.scanDuplicates() },
+                        onDeleteDuplicateClick = { id -> viewModel.deleteDuplicate(id) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

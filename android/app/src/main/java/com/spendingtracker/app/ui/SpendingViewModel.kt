@@ -9,6 +9,7 @@ import com.spendingtracker.app.data.BudgetRecord
 import com.spendingtracker.app.data.BudgetSuggestionsResponse
 import com.spendingtracker.app.data.BulkTransactionsRequest
 import com.spendingtracker.app.data.CachedDashboardSnapshot
+import com.spendingtracker.app.data.CategorySpending
 import com.spendingtracker.app.data.ChangePasswordRequest
 import com.spendingtracker.app.data.ConfirmTransactionItem
 import com.spendingtracker.app.data.ConfirmTransactionsRequest
@@ -20,6 +21,7 @@ import com.spendingtracker.app.data.CreateTransactionRequest
 import com.spendingtracker.app.data.CreateWalletRequest
 import com.spendingtracker.app.data.DashboardCache
 import com.spendingtracker.app.data.DraftTransactionPreview
+import com.spendingtracker.app.data.DuplicateScanResponse
 import com.spendingtracker.app.data.ForecastAndHealthResponse
 import com.spendingtracker.app.data.FxRatesResponse
 import com.spendingtracker.app.data.GlobalSearchResponse
@@ -34,6 +36,7 @@ import com.spendingtracker.app.data.MonthlyComparisonResponse
 import com.spendingtracker.app.data.MonthlySpendingResponse
 import com.spendingtracker.app.data.MonthlyTrendPoint
 import com.spendingtracker.app.data.OfflineQueue
+import com.spendingtracker.app.data.PaceComparison
 import com.spendingtracker.app.data.QuickInputParser
 import com.spendingtracker.app.data.QuickTemplateRecord
 import com.spendingtracker.app.data.RangeSpendingResponse
@@ -114,6 +117,9 @@ data class UiState(
     val merchantProfile: MerchantProfileResponse? = null,
     val budgetSuggestions: BudgetSuggestionsResponse? = null,
     val subscriptionAudit: SubscriptionAuditResponse? = null,
+    val incomeByCategory: List<CategorySpending> = emptyList(),
+    val paceVsLastMonth: PaceComparison? = null,
+    val duplicates: DuplicateScanResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -486,66 +492,48 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 val rEnd = _uiState.value.rangeEnd
                 val wrappedYear = _uiState.value.yearlyWrapped?.year ?: ym.year
 
-                // Stage 1: Critical Home + Ledger data in parallel (~1 RTT instead of 21 sequential calls)
-                val (summaryRes, txRes, rangeRes, budgetsRes, walletsRes, templatesRes, prefsRes) = supervisorScope {
-                    val sDef = async { api.getMonthlySpending(ym.year, ym.monthValue) }
-                    val tDef = async {
-                        if (rStart != null && rEnd != null) {
-                            api.getTransactions(startDate = rStart, endDate = rEnd, status = "confirmed")
-                        } else {
-                            api.getTransactions(year = ym.year, month = ym.monthValue, status = "confirmed")
-                        }
-                    }
-                    val rDef = async {
-                        if (rStart != null && rEnd != null) runCatching { api.getRangeSpending(rStart, rEnd) }.getOrNull()
-                        else null
-                    }
-                    val bDef = async { runCatching { api.getBudgets(ym.year, ym.monthValue) }.getOrNull() }
-                    val wDef = async { runCatching { api.getWallets() }.getOrNull() }
-                    val tplDef = async { runCatching { api.getTemplates() }.getOrNull() }
-                    val pDef = async { runCatching { api.getPreferences() }.getOrNull() }
-                    arrayOf(sDef.await(), tDef.await(), rDef.await(), bDef.await(), wDef.await(), tplDef.await(), pDef.await())
-                }.let { arr ->
-                    @Suppress("UNCHECKED_CAST")
-                    Stage1Result(
-                        summary = arr[0] as retrofit2.Response<MonthlySpendingResponse>,
-                        txs = arr[1] as retrofit2.Response<List<TransactionRecord>>,
-                        range = arr[2] as retrofit2.Response<RangeSpendingResponse>?,
-                        budgets = arr[3] as retrofit2.Response<List<BudgetRecord>>?,
-                        wallets = arr[4] as retrofit2.Response<List<WalletRecord>>?,
-                        templates = arr[5] as retrofit2.Response<List<QuickTemplateRecord>>?,
-                        prefs = arr[6] as retrofit2.Response<UserPreferencesResponse>?
-                    )
-                }
+                // Stage 1 (v1.9.0): Single-request gzipped dashboard bootstrap
+                val bootRes = api.getDashboardBootstrap(
+                    year = ym.year,
+                    month = ym.monthValue,
+                    startDate = rStart,
+                    endDate = rEnd,
+                    status = "confirmed"
+                )
+                val rangeRes = if (rStart != null && rEnd != null) {
+                    runCatching { api.getRangeSpending(rStart, rEnd) }.getOrNull()
+                } else null
 
-                if (summaryRes.code() == 401 || txRes.code() == 401) {
+                if (bootRes.code() == 401) {
                     logout()
                     _uiState.update { it.copy(errorMessage = "Session expired. Please sign in again.") }
                     return@launch
                 }
 
-                if (summaryRes.isSuccessful && txRes.isSuccessful) {
-                    val summaryBody = summaryRes.body()
-                    if (summaryBody != null) {
-                        tokenStore.saveWidgetSnapshot(
-                            balance = summaryBody.cumulativeBalance,
-                            monthSpent = summaryBody.totalSpent,
-                            currency = summaryBody.baseCurrency
-                        )
-                        SpendingWidgetProvider.notifyDataChanged(getApplication<Application>().applicationContext)
-                    }
+                if (bootRes.isSuccessful && bootRes.body() != null) {
+                    val boot = bootRes.body()!!
+                    val summaryBody = boot.monthlySpending
+                    tokenStore.saveWidgetSnapshot(
+                        balance = summaryBody.cumulativeBalance,
+                        monthSpent = summaryBody.totalSpent,
+                        currency = summaryBody.baseCurrency
+                    )
+                    SpendingWidgetProvider.notifyDataChanged(getApplication<Application>().applicationContext)
+
                     // Immediately paint Home & Ledger and clear loading spinner
                     _uiState.update {
                         it.copy(
                             isLoading = false,
                             monthlySpending = summaryBody,
-                            preferences = if (prefsRes?.isSuccessful == true) prefsRes.body() else it.preferences,
+                            preferences = boot.preferences ?: it.preferences,
+                            incomeByCategory = boot.incomeByCategory,
+                            paceVsLastMonth = boot.paceVsLastMonth,
                             globalSearch = null,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
-                            transactions = txRes.body().orEmpty(),
-                            wallets = if (walletsRes?.isSuccessful == true) walletsRes.body().orEmpty() else it.wallets,
-                            templates = if (templatesRes?.isSuccessful == true) templatesRes.body().orEmpty() else it.templates,
-                            budgets = if (budgetsRes?.isSuccessful == true) budgetsRes.body().orEmpty() else it.budgets,
+                            transactions = boot.transactions,
+                            wallets = boot.wallets,
+                            templates = boot.templates,
+                            budgets = boot.budgets,
                             offlineQueueCount = offlineQueue.count()
                         )
                     }
@@ -625,12 +613,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         flushOfflineQueue()
                     }
                 } else {
-                    val msg = if (!summaryRes.isSuccessful) {
-                        ApiClient.parseErrorMessage(summaryRes)
-                    } else {
-                        ApiClient.parseErrorMessage(txRes)
-                    }
-                    _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
+                    _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(bootRes)) }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -1327,6 +1310,49 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             } catch (e: Exception) {
                 _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Suggestions failed") }
             }
+        }
+    }
+
+    fun scanDuplicates() {
+        viewModelScope.launch {
+            try {
+                val res = api.scanDuplicates()
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    _uiState.update {
+                        it.copy(
+                            duplicates = body,
+                            statusMessage = if (body.count == 0) "No duplicates found" else "Found ${body.count} likely duplicate(s)"
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Duplicate scan failed") }
+            }
+        }
+    }
+
+    fun deleteDuplicate(id: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.deleteTransaction(id)
+                if (res.isSuccessful) {
+                    _uiState.update { st ->
+                        val rem = st.duplicates?.pairs?.filterNot { it.duplicate.id == id }.orEmpty()
+                        st.copy(
+                            duplicates = st.duplicates?.copy(count = rem.size, pairs = rem),
+                            statusMessage = "Duplicate removed"
+                        )
+                    }
+                    refreshDashboard()
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {}
         }
     }
 

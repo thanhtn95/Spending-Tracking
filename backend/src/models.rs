@@ -149,7 +149,7 @@ pub struct ListTransactionsQuery {
     pub wallet_id: Option<Uuid>,
 }
 
-#[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct TransactionRecord {
     pub id: Uuid,
     pub document_id: Option<Uuid>,
@@ -873,4 +873,48 @@ pub struct SubscriptionAuditResponse {
     pub annual_total: Decimal,
     pub pct_of_avg_income: Option<f64>,
     pub items: Vec<SubscriptionAuditItem>,
+}
+
+// --- v1.9.0: Single-Request Dashboard Bootstrap, Income Breakdown, Pace vs Last Month & Duplicate Scanner ---
+
+#[derive(Debug, Deserialize)]
+pub struct BootstrapQuery {
+    pub year: i32,
+    pub month: u32,
+    pub start_date: Option<NaiveDate>,
+    pub end_date: Option<NaiveDate>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PaceComparison {
+    pub current_spent: Decimal,
+    pub previous_spent: Decimal,
+    pub diff_pct: Option<f64>,
+    pub compared_through_day: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardBootstrapResponse {
+    pub monthly_spending: MonthlySpendingResponse,
+    pub transactions: Vec<TransactionRecord>,
+    pub budgets: Vec<BudgetRecord>,
+    pub wallets: Vec<WalletRecord>,
+    pub templates: Vec<QuickTemplateRecord>,
+    pub preferences: UserPreferencesResponse,
+    pub income_by_category: Vec<CategorySpending>,
+    pub pace_vs_last_month: PaceComparison,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuplicatePair {
+    pub keep: TransactionRecord,
+    pub duplicate: TransactionRecord,
+    pub days_apart: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuplicateScanResponse {
+    pub count: usize,
+    pub pairs: Vec<DuplicatePair>,
 }

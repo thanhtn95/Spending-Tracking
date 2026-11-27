@@ -148,6 +148,8 @@ fun DashboardScreen(
     onInspectMerchant: (String) -> Unit,
     onSuggestBudgetsClick: () -> Unit,
     onApplyBudgetSuggestion: (String, String) -> Unit,
+    onScanDuplicatesClick: () -> Unit,
+    onDeleteDuplicateClick: (String) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -171,6 +173,7 @@ fun DashboardScreen(
     var typeFilter by remember { mutableStateOf("all") } // all | debit | credit
     var categoryFilter by remember { mutableStateOf<String?>(null) }
     var tagFilter by remember { mutableStateOf<String?>(null) }
+    var quickFilter by remember { mutableStateOf<String?>(null) } // today | week | recurring
 
     fun maskAmt(raw: String): String = if (state.privacyMode) "••••••" else raw
 
@@ -186,14 +189,22 @@ fun DashboardScreen(
     val activeCategories = remember(state.transactions) {
         state.transactions.map { it.categoryName ?: "Uncategorized" }.distinct().sorted()
     }
-    val filteredTxs = remember(state.transactions, searchQuery, typeFilter, categoryFilter, tagFilter, minAmountFilter) {
+    val filteredTxs = remember(state.transactions, searchQuery, typeFilter, categoryFilter, tagFilter, minAmountFilter, quickFilter) {
         val q = searchQuery.trim().lowercase()
+        val todayStr = LocalDate.now().toString()
+        val weekAgoStr = LocalDate.now().minusDays(7).toString()
         state.transactions.filter { tx ->
             val typeOk = typeFilter == "all" || tx.txType.equals(typeFilter, ignoreCase = true)
             val catOk = categoryFilter == null || (tx.categoryName ?: "Uncategorized") == categoryFilter
             val tagOk = tagFilter == null || tx.tags.contains(tagFilter)
             val amtNum = (tx.baseAmount ?: tx.amount).toDoubleOrNull() ?: 0.0
             val minOk = minAmountFilter == null || amtNum >= minAmountFilter!!
+            val quickOk = when (quickFilter) {
+                "today" -> tx.txDate == todayStr
+                "week" -> tx.txDate >= weekAgoStr
+                "recurring" -> tx.isRecurring
+                else -> true
+            }
             val queryOk = q.isEmpty() ||
                 tx.vendor.lowercase().contains(q) ||
                 tx.txDate.lowercase().contains(q) ||
@@ -201,7 +212,7 @@ fun DashboardScreen(
                 (tx.walletName ?: "").lowercase().contains(q) ||
                 tx.tags.any { it.lowercase().contains(q.removePrefix("#")) } ||
                 (tx.description ?: "").lowercase().contains(q)
-            typeOk && catOk && tagOk && minOk && queryOk
+            typeOk && catOk && tagOk && minOk && quickOk && queryOk
         }
     }
     val groupedByDate = remember(filteredTxs) {
@@ -689,6 +700,14 @@ fun DashboardScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                state.paceVsLastMonth?.diffPct?.let { pct ->
+                                    val up = pct > 0
+                                    Text(
+                                        text = "${if (up) "↑ +" else "↓ "}$pct% vs last month (day ${state.paceVsLastMonth.comparedThroughDay})",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (up) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
+                                }
                             }
                             Text(
                                 text = maskAmt(
@@ -1573,6 +1592,34 @@ fun DashboardScreen(
                     }
                 }
 
+                // v1.9.0: Income Sources Breakdown Card — Home tab
+                if (selectedTab == 0 && state.incomeByCategory.isNotEmpty()) {
+                    item {
+                        val totalInc = state.monthlySpending?.totalCredit?.toBigDecimalOrNull()
+                            ?.takeIf { it > BigDecimal.ZERO } ?: BigDecimal.ONE
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = "INCOME SOURCES",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                state.incomeByCategory.forEach { cat ->
+                                    CategoryBreakdownRow(category = cat, totalSpent = totalInc)
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Ledger Header + Search + Debit/Credit Filter Chips — Ledger tab
                 if (selectedTab == 1) {
                 item {
@@ -1699,6 +1746,34 @@ fun DashboardScreen(
                                     selected = typeFilter == key,
                                     onClick = { typeFilter = key },
                                     label = { Text(label) }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = quickFilter == "today",
+                                    onClick = { quickFilter = if (quickFilter == "today") null else "today" },
+                                    label = { Text("Today") }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = quickFilter == "week",
+                                    onClick = { quickFilter = if (quickFilter == "week") null else "week" },
+                                    label = { Text("7d") }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = quickFilter == "recurring",
+                                    onClick = { quickFilter = if (quickFilter == "recurring") null else "recurring" },
+                                    label = { Text("Recurring") }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = categoryFilter == "Uncategorized",
+                                    onClick = { categoryFilter = if (categoryFilter == "Uncategorized") null else "Uncategorized" },
+                                    label = { Text("Uncat") }
                                 )
                             }
                             item {
@@ -1900,6 +1975,76 @@ fun DashboardScreen(
                         }
                     }
                 }
+                }
+
+                // v1.9.0: Duplicate Transaction Scanner Card — More tab
+                if (selectedTab == 3) {
+                    item {
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "DUPLICATE SCANNER",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    TextButton(onClick = onScanDuplicatesClick) {
+                                        Text("Scan")
+                                    }
+                                }
+                                val pairs = state.duplicates?.pairs.orEmpty()
+                                if (state.duplicates == null) {
+                                    Text(
+                                        text = "Tap Scan to find accidental duplicate transactions in the last 6 months.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else if (pairs.isEmpty()) {
+                                    Text(
+                                        text = "No likely duplicates found! Your ledger is clean.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    pairs.take(8).forEach { pair ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    "${pair.duplicate.vendor} · ${maskAmt(formatAmount(pair.duplicate.amount))} ${pair.duplicate.currency}",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    fontWeight = FontWeight.Medium
+                                                )
+                                                Text(
+                                                    "Keep ${pair.keep.txDate} · Dup ${pair.duplicate.txDate} (${pair.daysApart}d apart)",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            TextButton(onClick = { onDeleteDuplicateClick(pair.duplicate.id) }) {
+                                                Text("Delete", color = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 item { Spacer(modifier = Modifier.height(72.dp)) }

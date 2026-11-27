@@ -589,6 +589,37 @@ data class SubscriptionAuditResponse(
     val items: List<SubscriptionAuditItem> = emptyList()
 )
 
+// --- v1.9.0: Single-Request Dashboard Bootstrap, Pace vs Last Month & Duplicate Scanner ---
+
+data class PaceComparison(
+    @SerializedName("current_spent") val currentSpent: String = "0",
+    @SerializedName("previous_spent") val previousSpent: String = "0",
+    @SerializedName("diff_pct") val diffPct: Double? = null,
+    @SerializedName("compared_through_day") val comparedThroughDay: Int = 1
+)
+
+data class DashboardBootstrapResponse(
+    @SerializedName("monthly_spending") val monthlySpending: MonthlySpendingResponse,
+    val transactions: List<TransactionRecord> = emptyList(),
+    val budgets: List<BudgetRecord> = emptyList(),
+    val wallets: List<WalletRecord> = emptyList(),
+    val templates: List<QuickTemplateRecord> = emptyList(),
+    val preferences: UserPreferencesResponse? = null,
+    @SerializedName("income_by_category") val incomeByCategory: List<CategorySpending> = emptyList(),
+    @SerializedName("pace_vs_last_month") val paceVsLastMonth: PaceComparison? = null
+)
+
+data class DuplicatePair(
+    val keep: TransactionRecord,
+    val duplicate: TransactionRecord,
+    @SerializedName("days_apart") val daysApart: Long = 0
+)
+
+data class DuplicateScanResponse(
+    val count: Int = 0,
+    val pairs: List<DuplicatePair> = emptyList()
+)
+
 // --- Error ---
 
 data class ApiErrorEnvelope(

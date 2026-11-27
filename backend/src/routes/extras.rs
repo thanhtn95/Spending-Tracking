@@ -2,14 +2,15 @@ use crate::{
     error::AppError,
     models::{
         BackupBudget, BackupGoal, BackupImportResponse, BackupIou, BackupPayload, BackupRule,
-        BackupTemplate, BackupTransaction, BackupWallet, BudgetSuggestionItem,
+        BackupTemplate, BackupTransaction, BackupWallet, BootstrapQuery, BudgetSuggestionItem,
         BudgetSuggestionsResponse, BulkTransactionsRequest, BulkTransactionsResponse,
         CategoryMomChange, CategorySpending, CreateDraftNotificationRequest, CreateTemplateRequest,
-        CreateWalletRequest, ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery,
-        GlobalSearchResponse, MerchantMonthPoint, MerchantProfileQuery, MerchantProfileResponse,
+        CreateWalletRequest, DashboardBootstrapResponse, DuplicatePair, DuplicateScanResponse,
+        ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery, GlobalSearchResponse,
+        ListTransactionsQuery, MerchantMonthPoint, MerchantProfileQuery, MerchantProfileResponse,
         MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, NetWorthPoint,
-        QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse, Rule503020Response,
-        SpendingAlertItem, SplitTransactionRequest, SubscriptionAuditItem,
+        PaceComparison, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
+        Rule503020Response, SpendingAlertItem, SplitTransactionRequest, SubscriptionAuditItem,
         SubscriptionAuditResponse, TagSpending, TopMerchantItem, TransactionRecord,
         TransferWalletRequest, TransferWalletResponse, UpdatePreferencesRequest,
         UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
@@ -2886,6 +2887,258 @@ pub async fn subscription_audit(
         annual_total,
         pct_of_avg_income,
         items,
+    }))
+}
+
+// ================================
+// v1.9.0: Single-Request Dashboard Bootstrap (runs core queries concurrently)
+// ================================
+
+pub async fn dashboard_bootstrap(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<BootstrapQuery>,
+) -> Result<Json<DashboardBootstrapResponse>, AppError> {
+    let year = params.year;
+    let month = params.month;
+    let start_date = NaiveDate::from_ymd_opt(year, month, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year or month".to_string()))?;
+    let end_date = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)
+    }
+    .ok_or_else(|| AppError::BadRequest("Invalid year or month".to_string()))?;
+
+    let (prev_year, prev_month) = if month == 1 {
+        (year - 1, 12)
+    } else {
+        (year, month - 1)
+    };
+    let prev_start = NaiveDate::from_ymd_opt(prev_year, prev_month, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid prev month".to_string()))?;
+    let today = Utc::now().date_naive();
+    let days_in_month = (end_date - start_date).num_days() as u32;
+    let compared_day = if year == today.year() && month == today.month() {
+        today.day().min(days_in_month)
+    } else {
+        days_in_month
+    };
+    let cur_pace_end = start_date + chrono::Duration::days(compared_day as i64);
+    let prev_month_end = start_date;
+    let prev_days = (prev_month_end - prev_start).num_days() as u32;
+    let prev_pace_end = prev_start + chrono::Duration::days(compared_day.min(prev_days) as i64);
+
+    let tx_query = ListTransactionsQuery {
+        year: if params.start_date.is_some() { None } else { Some(year) },
+        month: if params.start_date.is_some() { None } else { Some(month) },
+        start_date: params.start_date,
+        end_date: params.end_date,
+        status: params.status.or_else(|| Some("confirmed".to_string())),
+        tag: None,
+        wallet_id: None,
+    };
+
+    let (
+        Json(monthly_spending),
+        Json(transactions),
+        Json(budgets),
+        Json(wallets),
+        Json(templates),
+        Json(preferences),
+        income_by_category,
+        pace_pair,
+    ) = tokio::try_join!(
+        crate::routes::transactions::monthly_spending(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        crate::routes::transactions::list_transactions(
+            State(state.clone()),
+            auth.clone(),
+            Query(tx_query),
+        ),
+        crate::routes::transactions::list_budgets(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        list_wallets(State(state.clone()), auth.clone()),
+        list_templates(State(state.clone()), auth.clone()),
+        get_preferences(State(state.clone()), auth.clone()),
+        async {
+            sqlx::query_as::<_, CategorySpending>(
+                r#"
+                SELECT
+                    t.category_id,
+                    COALESCE(c.name, 'Income') AS category_name,
+                    COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total_spent,
+                    COUNT(*) AS transaction_count
+                FROM transactions t
+                LEFT JOIN categories c ON c.id = t.category_id
+                WHERE t.user_id = $1
+                  AND t.status = 'confirmed'
+                  AND t.is_transfer = FALSE
+                  AND t.tx_type = 'credit'
+                  AND t.tx_date >= $2
+                  AND t.tx_date < $3
+                GROUP BY t.category_id, c.name
+                ORDER BY total_spent DESC
+                "#,
+            )
+            .bind(auth.user_id)
+            .bind(start_date)
+            .bind(end_date)
+            .fetch_all(&state.db)
+            .await
+            .map_err(AppError::from)
+        },
+        async {
+            let cur_amt: Decimal = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+                FROM transactions
+                WHERE user_id = $1
+                  AND status = 'confirmed'
+                  AND is_transfer = FALSE
+                  AND tx_type = 'debit'
+                  AND tx_date >= $2
+                  AND tx_date < $3
+                "#,
+            )
+            .bind(auth.user_id)
+            .bind(start_date)
+            .bind(cur_pace_end)
+            .fetch_one(&state.db)
+            .await
+            .map_err(AppError::from)?;
+
+            let prev_amt: Decimal = sqlx::query_scalar(
+                r#"
+                SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+                FROM transactions
+                WHERE user_id = $1
+                  AND status = 'confirmed'
+                  AND is_transfer = FALSE
+                  AND tx_type = 'debit'
+                  AND tx_date >= $2
+                  AND tx_date < $3
+                "#,
+            )
+            .bind(auth.user_id)
+            .bind(prev_start)
+            .bind(prev_pace_end)
+            .fetch_one(&state.db)
+            .await
+            .map_err(AppError::from)?;
+
+            Ok::<(Decimal, Decimal), AppError>((cur_amt, prev_amt))
+        }
+    )?;
+
+    let (current_spent, previous_spent) = pace_pair;
+    let diff_pct = if previous_spent > Decimal::ZERO {
+        let p = (((current_spent - previous_spent) / previous_spent) * Decimal::from(100))
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        Some((p * 10.0).round() / 10.0)
+    } else {
+        None
+    };
+
+    Ok(Json(DashboardBootstrapResponse {
+        monthly_spending,
+        transactions,
+        budgets,
+        wallets,
+        templates,
+        preferences,
+        income_by_category,
+        pace_vs_last_month: PaceComparison {
+            current_spent,
+            previous_spent,
+            diff_pct,
+            compared_through_day: compared_day,
+        },
+    }))
+}
+
+// ================================
+// v1.9.0: Duplicate Transaction Scanner
+// ================================
+
+pub async fn scan_duplicates(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<DuplicateScanResponse>, AppError> {
+    let cutoff = Utc::now().date_naive() - chrono::Duration::days(180);
+    let txs: Vec<TransactionRecord> = sqlx::query_as(
+        r#"
+        SELECT
+            t.id, t.document_id, t.tx_date, t.vendor, t.description,
+            t.category_id, c.name AS category_name,
+            t.wallet_id, w.name AS wallet_name,
+            t.amount, t.base_amount, t.tx_type, t.currency, t.source, t.status,
+            t.is_recurring, t.is_transfer, t.tags, t.created_at
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN wallets w ON w.id = t.wallet_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_date >= $2
+        ORDER BY t.tx_date DESC, t.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut pairs: Vec<DuplicatePair> = Vec::new();
+    let mut flagged = std::collections::HashSet::new();
+
+    for i in 0..txs.len() {
+        if flagged.contains(&txs[i].id) {
+            continue;
+        }
+        let a = &txs[i];
+        let norm_a = normalize_text(&a.vendor);
+        for j in (i + 1)..txs.len() {
+            let b = &txs[j];
+            if flagged.contains(&b.id) {
+                continue;
+            }
+            let days_apart = (a.tx_date - b.tx_date).num_days().abs();
+            if days_apart > 2 {
+                break; // sorted DESC by tx_date
+            }
+            if a.tx_type == b.tx_type
+                && a.amount == b.amount
+                && normalize_text(&b.vendor) == norm_a
+            {
+                flagged.insert(b.id);
+                pairs.push(DuplicatePair {
+                    keep: a.clone(),
+                    duplicate: b.clone(),
+                    days_apart,
+                });
+                if pairs.len() >= 25 {
+                    break;
+                }
+            }
+        }
+        if pairs.len() >= 25 {
+            break;
+        }
+    }
+
+    Ok(Json(DuplicateScanResponse {
+        count: pairs.len(),
+        pairs,
     }))
 }
 

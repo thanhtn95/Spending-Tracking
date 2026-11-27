@@ -589,30 +589,33 @@
   async function refreshDashboard() {
     const q = `year=${state.year}&month=${state.month}`;
     const status = txStatusFilter.value;
-    const txUrl = state.rangeMode && state.rangeStart && state.rangeEnd
-      ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
-      : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
+    const bootParams = new URLSearchParams({ year: String(state.year), month: String(state.month), status });
+    if (state.rangeMode && state.rangeStart && state.rangeEnd) {
+      bootParams.set("start_date", state.rangeStart);
+      bootParams.set("end_date", state.rangeEnd);
+    }
     try {
-      // Stage 1: Critical Overview + Ledger data first for fast first paint
-      const [summary, txs, budgets, wallets, templates, prefs] = await Promise.all([
-        apiFetch(`/api/v1/spending/monthly?${q}`),
-        apiFetch(txUrl),
-        apiFetch(`/api/v1/budgets?${q}`),
-        apiFetch(`/api/v1/wallets`),
-        apiFetch(`/api/v1/templates`),
-        apiFetch(`/api/v1/preferences`),
-      ]);
+      // Stage 1 (v1.9.0): Single-request gzipped dashboard bootstrap
+      const boot = await apiFetch(`/api/v1/dashboard/bootstrap?${bootParams.toString()}`);
+      const summary = boot.monthly_spending;
+      const txs = boot.transactions || [];
+      const budgets = boot.budgets || [];
+      const wallets = boot.wallets || [];
+      const templates = boot.templates || [];
+      const prefs = boot.preferences;
       state.baseCurrency = summary?.base_currency || "VND";
-      state.wallets = wallets || [];
-      state.templates = templates || [];
+      state.wallets = wallets;
+      state.templates = templates;
       if (prefs) state.prefs = prefs;
       state.selectedTxIds.clear();
       syncBulkBar();
       renderSummary(summary);
+      renderIncomeSources(boot.income_by_category || [], summary?.total_credit || 0);
+      renderPace(boot.pace_vs_last_month);
       renderPreferences(state.prefs);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
-      state.transactions = txs || [];
+      state.transactions = txs;
       const todayIso = new Date().toISOString().slice(0, 10);
       const todaySpentEl = document.getElementById("today-spent");
       if (todaySpentEl) {
@@ -623,8 +626,8 @@
       }
       renderTransactions();
       renderCalendarHeatmap(state.transactions);
-      renderBudgets(budgets || []);
-      renderSafeToSpend(budgets || []);
+      renderBudgets(budgets);
+      renderSafeToSpend(budgets);
 
       // Stage 2: Secondary Planning & Tools analytics in parallel (non-blocking)
       Promise.all([
@@ -1895,6 +1898,112 @@
     });
   }
 
+  // --- v1.9.0: Income Sources Breakdown, Pace vs Last Month, Quick Filters & Duplicate Scanner ---
+  function renderIncomeSources(cats, totalCredit) {
+    const el = document.getElementById("income-category-list");
+    if (!el) return;
+    if (!cats || !cats.length) {
+      el.innerHTML = `<div class="empty-block">No confirmed income for this month yet.</div>`;
+      return;
+    }
+    const denom = Number(totalCredit || 0) || 1;
+    el.innerHTML = cats.map((c) => {
+      const pct = Math.min(100, Math.round((Number(c.total_spent) / denom) * 100));
+      const color = categoryColor(c.category_name);
+      return `
+        <div>
+          <div class="cat-row-top">
+            <span class="cat-name-wrap">
+              <span class="cat-dot" style="background:${color}"></span>
+              <span>${escapeHtml(c.category_name)}</span>
+              <span class="muted">(${c.transaction_count})</span>
+            </span>
+            <span class="mono text-credit" style="font-size:0.86rem;">+${formatNumber(c.total_spent)} <span class="muted">${pct}%</span></span>
+          </div>
+          <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        </div>`;
+    }).join("");
+  }
+
+  function renderPace(pace) {
+    const wrap = document.getElementById("pace-wrap");
+    const val = document.getElementById("pace-val");
+    if (!wrap || !val || !pace || pace.diff_pct == null) {
+      if (wrap) wrap.classList.add("hidden");
+      return;
+    }
+    wrap.classList.remove("hidden");
+    const up = pace.diff_pct > 0;
+    val.textContent = `${up ? "↑ +" : "↓ "}${pace.diff_pct}% (d${pace.compared_through_day})`;
+    val.className = `kpi-val mono ${up ? "text-debt" : "text-credit"}`;
+  }
+
+  const quickFilterBtns = Array.from(document.querySelectorAll("[data-quick-filter]"));
+  quickFilterBtns.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const kind = btn.dataset.quickFilter;
+      const wasActive = btn.classList.contains("active");
+      quickFilterBtns.forEach((b) => b.classList.remove("active"));
+      txSearch.value = "";
+      if (txMinAmountEl) txMinAmountEl.value = "";
+      if (txCategoryFilter) txCategoryFilter.value = "all";
+      state.quickFilter = null;
+      if (!wasActive) {
+        btn.classList.add("active");
+        state.quickFilter = kind;
+        if (kind === "today") txSearch.value = new Date().toISOString().slice(0, 10);
+        else if (kind === "uncategorized" && txCategoryFilter) txCategoryFilter.value = "Uncategorized";
+        else if (kind === "large" && txMinAmountEl) txMinAmountEl.value = "500000";
+      }
+      renderTransactions();
+    });
+  });
+
+  const btnScanDuplicates = document.getElementById("btn-scan-duplicates");
+  const duplicatesListEl = document.getElementById("duplicates-list");
+  if (btnScanDuplicates && duplicatesListEl) {
+    btnScanDuplicates.addEventListener("click", async () => {
+      btnScanDuplicates.disabled = true;
+      duplicatesListEl.innerHTML = `<div class="empty-block">Scanning last 6 months...</div>`;
+      try {
+        const res = await apiFetch("/api/v1/transactions/duplicates");
+        const pairs = res?.pairs || [];
+        if (!pairs.length) {
+          duplicatesListEl.innerHTML = `<div class="empty-block">No likely duplicates found! Your ledger is clean.</div>`;
+        } else {
+          duplicatesListEl.innerHTML = pairs.map((p) => `
+            <div class="alert-item">
+              <div>
+                <strong>${escapeHtml(p.duplicate.vendor)} · ${formatNumber(p.duplicate.amount)} ${escapeHtml(p.duplicate.currency)}</strong>
+                <div class="muted" style="font-size:0.78rem;">
+                  Keep ${escapeHtml(p.keep.tx_date)} · Duplicate on ${escapeHtml(p.duplicate.tx_date)} (${p.days_apart}d apart)
+                </div>
+              </div>
+              <button class="btn btn-danger-ghost btn-sm" type="button" data-del-dup="${escapeHtml(p.duplicate.id)}">Delete Dup</button>
+            </div>`).join("");
+        }
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btnScanDuplicates.disabled = false;
+      }
+    });
+    duplicatesListEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-del-dup]");
+      if (!btn) return;
+      btn.disabled = true;
+      try {
+        await apiFetch(`/api/v1/transactions/${encodeURIComponent(btn.dataset.delDup)}`, { method: "DELETE" });
+        btn.closest(".alert-item")?.remove();
+        showToast("Duplicate deleted.");
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+        btn.disabled = false;
+      }
+    });
+  }
+
   // --- Bulk Selection & Actions (#4) ---
   function syncBulkBar() {
     if (!bulkBar) return;
@@ -2180,6 +2289,12 @@
       if (walletFilter !== "all" && t.wallet_id !== walletFilter) return false;
       if (tagFilter !== "all" && !(t.tags || []).includes(tagFilter)) return false;
       if (minAmt > 0 && Number(t.base_amount ?? t.amount ?? 0) < minAmt) return false;
+      if (state.quickFilter === "recurring" && !t.is_recurring) return false;
+      if (state.quickFilter === "week") {
+        const d7 = new Date();
+        d7.setDate(d7.getDate() - 7);
+        if ((t.tx_date || "") < d7.toISOString().slice(0, 10)) return false;
+      }
       if (!query) return true;
       return (t.vendor || "").toLowerCase().includes(query) ||
         (t.tx_date || "").toLowerCase().includes(query) ||

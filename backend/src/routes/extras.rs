@@ -2365,6 +2365,7 @@ pub async fn yearly_wrapped(
     let top_categories: Vec<CategorySpending> = sqlx::query_as(
         r#"
         SELECT
+            t.category_id,
             COALESCE(c.name, 'Uncategorized') AS category_name,
             COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total_spent,
             COUNT(*) AS transaction_count
@@ -2376,7 +2377,7 @@ pub async fn yearly_wrapped(
           AND t.tx_type = 'debit'
           AND t.tx_date >= $2
           AND t.tx_date < $3
-        GROUP BY 1
+        GROUP BY t.category_id, c.name
         ORDER BY total_spent DESC
         LIMIT 5
         "#,

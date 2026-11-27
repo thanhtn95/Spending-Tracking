@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.Button
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.SnackbarResult
@@ -142,6 +144,10 @@ fun DashboardScreen(
     onUndoDeleteTx: (TransactionRecord) -> Unit,
     onGlobalSearchClick: (String, String?) -> Unit,
     onClearGlobalSearchClick: () -> Unit,
+    onYearlyWrappedYearChange: (Int) -> Unit,
+    onInspectMerchant: (String) -> Unit,
+    onSuggestBudgetsClick: () -> Unit,
+    onApplyBudgetSuggestion: (String, String) -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -804,10 +810,13 @@ fun DashboardScreen(
                                 }
                                 if (comp.topMerchants.isNotEmpty()) {
                                     HorizontalDivider(color = MaterialTheme.colorScheme.outline)
-                                    Text("Top Merchants", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Top Merchants (tap to inspect)", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     comp.topMerchants.forEach { m ->
                                         Row(
-                                            modifier = Modifier.fillMaxWidth(),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable { onInspectMerchant(m.vendor) }
+                                                .padding(vertical = 2.dp),
                                             horizontalArrangement = Arrangement.SpaceBetween
                                         ) {
                                             Text("${m.vendor} (${m.transactionCount}x)", style = MaterialTheme.typography.bodySmall)
@@ -823,20 +832,163 @@ fun DashboardScreen(
                         }
                     }
                 }
+
+                // v1.8.0: 50/30/20 Rule Card
+                state.rule503020?.let { rule ->
+                    item {
+                        Rule503020Card(rule = rule, privacyMode = state.privacyMode)
+                    }
+                }
+
+                // v1.8.0: Merchant Lifetime Profile Card
+                item {
+                    MerchantProfileCard(
+                        profile = state.merchantProfile,
+                        privacyMode = state.privacyMode,
+                        onInspect = onInspectMerchant
+                    )
+                }
+
+                // v1.8.0: Annual Year-in-Review ("Wrapped") Card
+                state.yearlyWrapped?.let { wrapped ->
+                    item {
+                        YearlyWrappedCard(
+                            wrapped = wrapped,
+                            privacyMode = state.privacyMode,
+                            onPrevYear = { onYearlyWrappedYearChange(wrapped.year - 1) },
+                            onNextYear = { onYearlyWrappedYearChange(wrapped.year + 1) },
+                            onInspectMerchant = onInspectMerchant
+                        )
+                    }
+                }
+
                 if (state.trend.isNotEmpty()) {
                     item {
                         CashFlowTrendCard(points = state.trend)
                     }
                 }
 
-                // Monthly Budgets Card
+                // Monthly Budgets Card + v1.8.0 Smart Budget Auto-Suggest
                 item {
-                    BudgetsCard(
-                        budgets = state.budgets,
-                        selectedMonth = state.selectedMonth,
-                        onSetBudgetClick = onSetBudgetClick,
-                        onNewCategoryClick = onNewCategoryClick
-                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        BudgetsCard(
+                            budgets = state.budgets,
+                            selectedMonth = state.selectedMonth,
+                            onSetBudgetClick = onSetBudgetClick,
+                            onNewCategoryClick = onNewCategoryClick
+                        )
+                        Card(
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "SMART BUDGET SUGGESTIONS",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    TextButton(onClick = onSuggestBudgetsClick) {
+                                        Text("3M Avg")
+                                    }
+                                }
+                                val suggs = state.budgetSuggestions?.suggestions.orEmpty()
+                                val suggCur = state.budgetSuggestions?.baseCurrency ?: baseCurrency
+                                if (suggs.isEmpty()) {
+                                    Text(
+                                        text = "Tap 3M Avg to auto-suggest category budgets from your trailing 3-month spending.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                } else {
+                                    suggs.take(6).forEach { s ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(s.categoryName, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                                Text(
+                                                    "Avg: ${maskAmt(formatAmount(s.avgMonthlySpent))} → ${maskAmt(formatAmount(s.suggestedLimit))} $suggCur",
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            TextButton(onClick = { onApplyBudgetSuggestion(s.categoryName, s.suggestedLimit) }) {
+                                                Text("Apply")
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // v1.8.0: Subscription Annual Cost Audit Card
+                state.subscriptionAudit?.let { audit ->
+                    if (audit.items.isNotEmpty()) {
+                        item {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(18.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "SUBSCRIPTION COST AUDIT",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = maskAmt("${formatAmount(audit.annualTotal)} ${audit.baseCurrency}/yr"),
+                                            style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                    Text(
+                                        text = "Monthly burn: ${maskAmt(formatAmount(audit.monthlyTotal))} ${audit.baseCurrency}/mo" +
+                                            (audit.pctOfAvgIncome?.let { " · $it% of avg income" } ?: ""),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    audit.items.take(6).forEach { it ->
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween
+                                        ) {
+                                            Text("${it.vendor} (${it.occurrences}x)", style = MaterialTheme.typography.bodySmall)
+                                            Text(
+                                                text = maskAmt("${formatAmount(it.annualCost)}/yr"),
+                                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Recurring Bills Radar
@@ -2423,6 +2575,286 @@ private fun SpendingCalendarHeatmapCard(
                                     )
                                 }
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun Rule503020Card(
+    rule: com.spendingtracker.app.data.Rule503020Response,
+    privacyMode: Boolean
+) {
+    val totalPct = (rule.needsPct + rule.wantsPct + rule.savingsPct).coerceAtLeast(0.0)
+    fun mask(s: String) = if (privacyMode) "••••••" else s
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "50 / 30 / 20 RULE",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "${rule.needsPct.toInt()}% / ${rule.wantsPct.toInt()}% / ${rule.savingsPct.toInt()}%",
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            if (totalPct <= 0.0) {
+                Text(
+                    text = "No spending or income recorded for this month yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                val nWeight = (rule.needsPct / totalPct).toFloat().coerceAtLeast(0.001f)
+                val wWeight = (rule.wantsPct / totalPct).toFloat().coerceAtLeast(0.001f)
+                val sWeight = (rule.savingsPct / totalPct).toFloat().coerceAtLeast(0.001f)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(12.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                ) {
+                    if (rule.needsPct > 0) Box(modifier = Modifier.weight(nWeight).fillMaxHeight().background(Color(0xFF2563EB)))
+                    if (rule.wantsPct > 0) Box(modifier = Modifier.weight(wWeight).fillMaxHeight().background(Color(0xFFD97706)))
+                    if (rule.savingsPct > 0) Box(modifier = Modifier.weight(sWeight).fillMaxHeight().background(Color(0xFF059669)))
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Needs ${rule.needsPct}% (target 50%)", style = MaterialTheme.typography.bodySmall, color = Color(0xFF2563EB))
+                    Text(mask("${formatAmount(rule.needsAmount)} ${rule.baseCurrency}"), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Wants ${rule.wantsPct}% (target 30%)", style = MaterialTheme.typography.bodySmall, color = Color(0xFFD97706))
+                    Text(mask("${formatAmount(rule.wantsAmount)} ${rule.baseCurrency}"), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Savings ${rule.savingsPct}% (target 20%)", style = MaterialTheme.typography.bodySmall, color = Color(0xFF059669))
+                    Text(mask("${formatAmount(rule.savingsAmount)} ${rule.baseCurrency}"), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MerchantProfileCard(
+    profile: com.spendingtracker.app.data.MerchantProfileResponse?,
+    privacyMode: Boolean,
+    onInspect: (String) -> Unit
+) {
+    var query by remember { mutableStateOf(profile?.vendor ?: "") }
+    fun mask(s: String) = if (privacyMode) "••••••" else s
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "MERCHANT LIFETIME PROFILE",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Merchant name (e.g. Grab)", style = MaterialTheme.typography.bodySmall) },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Button(
+                    onClick = { if (query.isNotBlank()) onInspect(query) },
+                    enabled = query.isNotBlank()
+                ) {
+                    Text("Inspect")
+                }
+            }
+            if (profile == null) {
+                Text(
+                    text = "Tap any Top Merchant or search a vendor above to inspect lifetime spend, visits, and average ticket.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (profile.visitCount <= 0) {
+                Text(
+                    text = "No spending found matching \"${profile.vendor}\".",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Lifetime", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(mask(formatAmount(profile.totalSpent)), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Visits", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("${profile.visitCount}x", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Avg Ticket", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(mask(formatAmount(profile.avgTicket)), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+                Text(
+                    text = "Range: ${mask(formatAmount(profile.minAmount))} – ${mask(formatAmount(profile.maxAmount))} ${profile.baseCurrency} · ${profile.firstSeen ?: ""} → ${profile.lastSeen ?: ""}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                profile.recentTransactions.take(4).forEach { tx ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("${tx.txDate} · ${tx.vendor}", style = MaterialTheme.typography.bodySmall)
+                        Text(mask("${formatAmount(tx.amount)} ${tx.currency}"), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun YearlyWrappedCard(
+    wrapped: com.spendingtracker.app.data.YearlyWrappedResponse,
+    privacyMode: Boolean,
+    onPrevYear: () -> Unit,
+    onNextYear: () -> Unit,
+    onInspectMerchant: (String) -> Unit
+) {
+    fun mask(s: String) = if (privacyMode) "••••••" else s
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "YEAR IN REVIEW (${wrapped.year})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onPrevYear) { Text("‹") }
+                    Text("${wrapped.year}", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
+                    TextButton(onClick = onNextYear) { Text("›") }
+                }
+            }
+            if (wrapped.transactionCount <= 0) {
+                Text(
+                    text = "No confirmed transactions recorded in ${wrapped.year}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Income", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(mask("+${formatAmount(wrapped.totalIncome)}"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                    }
+                    Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(10.dp), modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text("Spent", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(mask("-${formatAmount(wrapped.totalSpent)}"), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                Text(
+                    text = "${wrapped.transactionCount} tx · Savings rate: ${wrapped.savingsRatePct?.let { "$it%" } ?: "—"} · Lowest: ${wrapped.bestMonth ?: "—"} · Highest: ${wrapped.busiestMonth ?: "—"}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                wrapped.biggestExpense?.let { big ->
+                    Text(
+                        text = "Biggest expense: ${big.vendor} (${mask("${formatAmount(big.amount)} ${wrapped.baseCurrency}")} on ${big.txDate})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                // 12-Month Bar Chart
+                val maxMonth = wrapped.months.maxOfOrNull { it.totalSpent.toDoubleOrNull() ?: 0.0 }?.coerceAtLeast(1.0) ?: 1.0
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(72.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    wrapped.months.forEach { m ->
+                        val ratio = ((m.totalSpent.toDoubleOrNull() ?: 0.0) / maxMonth).toFloat().coerceIn(0f, 1f)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Bottom,
+                            modifier = Modifier.weight(1f).fillMaxHeight()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(8.dp)
+                                    .height((ratio * 48f).coerceAtLeast(3f).dp)
+                                    .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            Spacer(modifier = Modifier.height(3.dp))
+                            Text(m.label.take(1), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (wrapped.topMerchants.isNotEmpty()) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                    Text("Top Merchants (${wrapped.year})", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    wrapped.topMerchants.take(3).forEach { m ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onInspectMerchant(m.vendor) }
+                                .padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text("${m.vendor} (${m.transactionCount}x)", style = MaterialTheme.typography.bodySmall)
+                            Text(mask("${formatAmount(m.totalSpent)} ${wrapped.baseCurrency}"), style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"), fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }

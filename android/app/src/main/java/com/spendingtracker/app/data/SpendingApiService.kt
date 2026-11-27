@@ -243,4 +243,27 @@ interface SpendingApiService {
 
     @GET("api/v1/fx/rates")
     suspend fun getFxRates(): Response<FxRatesResponse>
+
+    // v1.8.0: Yearly Wrapped, 50/30/20 Rule, Merchant Profile, Smart Budget Suggest & Subscription Audit
+    @GET("api/v1/spending/yearly")
+    suspend fun getYearlyWrapped(
+        @Query("year") year: Int
+    ): Response<YearlyWrappedResponse>
+
+    @GET("api/v1/spending/rule-50-30-20")
+    suspend fun getRule503020(
+        @Query("year") year: Int,
+        @Query("month") month: Int
+    ): Response<Rule503020Response>
+
+    @GET("api/v1/spending/merchant")
+    suspend fun getMerchantProfile(
+        @Query("vendor") vendor: String
+    ): Response<MerchantProfileResponse>
+
+    @GET("api/v1/budgets/suggest")
+    suspend fun getBudgetSuggestions(): Response<BudgetSuggestionsResponse>
+
+    @GET("api/v1/spending/subscriptions")
+    suspend fun getSubscriptionAudit(): Response<SubscriptionAuditResponse>
 }

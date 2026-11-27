@@ -593,7 +593,7 @@
       ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
       : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
     try {
-      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs, weekday, fxRates] = await Promise.all([
+      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs, weekday, fxRates, rule503020, yearly, subAudit] = await Promise.all([
         apiFetch(`/api/v1/spending/monthly?${q}`),
         apiFetch(txUrl),
         apiFetch(`/api/v1/spending/trend?months=6`),
@@ -610,6 +610,9 @@
         apiFetch(`/api/v1/preferences`),
         apiFetch(`/api/v1/spending/weekday?months=3`),
         apiFetch(`/api/v1/fx/rates`),
+        apiFetch(`/api/v1/spending/rule-50-30-20?${q}`),
+        apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear || state.year}`),
+        apiFetch(`/api/v1/spending/subscriptions`),
       ]);
       state.baseCurrency = summary?.base_currency || "VND";
       state.wallets = wallets || [];
@@ -628,6 +631,9 @@
       renderForecast(forecast);
       renderWeekday(weekday);
       renderComparison(comparison);
+      renderRule503020(rule503020);
+      renderYearlyWrapped(yearly);
+      renderSubscriptionAudit(subAudit);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
       renderRules(state.rules);
@@ -1644,12 +1650,235 @@
         topMerchantsList.innerHTML = `<div class="empty-block">No spending merchants this month.</div>`;
       } else {
         topMerchantsList.innerHTML = merchants.map((m) => `
-          <div class="mom-row">
+          <div class="mom-row" data-merchant-inspect="${escapeHtml(m.vendor)}" style="cursor:pointer;" title="Click to inspect lifetime history">
             <span>${escapeHtml(m.vendor)} <span class="muted">(${m.transaction_count}x)</span></span>
             <span class="mono">${formatNumber(m.total_spent)} ${escapeHtml(comp.base_currency)}</span>
           </div>`).join("");
       }
     }
+  }
+
+  // --- v1.8.0: 50/30/20 Rule, Yearly Wrapped, Merchant Profile, Smart Budget Suggest & Subscription Audit ---
+  function renderRule503020(r) {
+    const body = document.getElementById("rule503020-body");
+    const badge = document.getElementById("rule503020-badge");
+    if (!body || !r) return;
+    const total = Number(r.needs_pct || 0) + Number(r.wants_pct || 0) + Number(r.savings_pct || 0);
+    if (total <= 0) {
+      body.innerHTML = `<div class="empty-block">No spending or income recorded for this month yet.</div>`;
+      return;
+    }
+    if (badge) badge.textContent = `${r.needs_pct}% / ${r.wants_pct}% / ${r.savings_pct}%`;
+    const norm = Math.max(100, total);
+    const wNeeds = Math.min(100, (r.needs_pct / norm) * 100);
+    const wWants = Math.min(100 - wNeeds, (r.wants_pct / norm) * 100);
+    const wSav = Math.max(0, 100 - wNeeds - wWants);
+    const diffStr = (actual, target) => {
+      const d = Math.round((actual - target) * 10) / 10;
+      return `${d >= 0 ? "+" : ""}${d}% vs ${target}%`;
+    };
+    body.innerHTML = `
+      <div style="display:flex;height:14px;border-radius:8px;overflow:hidden;background:var(--border);margin-bottom:12px;">
+        <div style="width:${wNeeds}%;background:#2563EB;" title="Needs ${r.needs_pct}%"></div>
+        <div style="width:${wWants}%;background:#D97706;" title="Wants ${r.wants_pct}%"></div>
+        <div style="width:${wSav}%;background:#059669;" title="Savings ${r.savings_pct}%"></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="mom-row">
+          <span><span class="cat-dot" style="background:#2563EB;margin-right:6px;"></span>Needs (${r.needs_pct}%) <span class="muted">${diffStr(r.needs_pct, 50)}</span></span>
+          <span class="mono">${formatNumber(r.needs_amount)} ${escapeHtml(r.base_currency)}</span>
+        </div>
+        <div class="mom-row">
+          <span><span class="cat-dot" style="background:#D97706;margin-right:6px;"></span>Wants (${r.wants_pct}%) <span class="muted">${diffStr(r.wants_pct, 30)}</span></span>
+          <span class="mono">${formatNumber(r.wants_amount)} ${escapeHtml(r.base_currency)}</span>
+        </div>
+        <div class="mom-row">
+          <span><span class="cat-dot" style="background:#059669;margin-right:6px;"></span>Savings (${r.savings_pct}%) <span class="muted">${diffStr(r.savings_pct, 20)}</span></span>
+          <span class="mono">${formatNumber(r.savings_amount)} ${escapeHtml(r.base_currency)}</span>
+        </div>
+      </div>`;
+  }
+
+  function renderYearlyWrapped(y) {
+    const body = document.getElementById("yearly-wrapped-body");
+    const yearEl = document.getElementById("yearly-wrapped-year");
+    if (!body || !y) return;
+    if (yearEl) yearEl.textContent = String(y.year);
+    if (!y.transaction_count) {
+      body.innerHTML = `<div class="empty-block">No confirmed transactions recorded in ${y.year}.</div>`;
+      return;
+    }
+    const maxM = Math.max(1, ...(y.months || []).map((m) => Number(m.total_spent || 0)));
+    const bars = (y.months || []).map((m) => {
+      const h = Math.max(4, Math.round((Number(m.total_spent || 0) / maxM) * 76));
+      return `
+        <div class="trend-col" title="${m.label} ${y.year}: Spent ${formatNumber(m.total_spent)} · Income ${formatNumber(m.total_income)} ${y.base_currency}">
+          <div class="trend-bars"><div class="trend-bar trend-bar-debit" style="height:${h}px;width:12px;"></div></div>
+          <span class="trend-label">${m.label}</span>
+        </div>`;
+    }).join("");
+    const biggest = y.biggest_expense
+      ? `${escapeHtml(y.biggest_expense.vendor)} (${formatNumber(y.biggest_expense.amount)} ${escapeHtml(y.base_currency)} on ${escapeHtml(y.biggest_expense.tx_date)})`
+      : "—";
+    const topCats = (y.top_categories || []).map((c) =>
+      `<div class="mom-row"><span>${escapeHtml(c.category_name)}</span><span class="mono">${formatNumber(c.total_spent)}</span></div>`
+    ).join("") || `<div class="muted">None</div>`;
+    const topMerch = (y.top_merchants || []).map((m) =>
+      `<div class="mom-row" data-merchant-inspect="${escapeHtml(m.vendor)}" style="cursor:pointer;"><span>${escapeHtml(m.vendor)} <span class="muted">(${m.transaction_count}x)</span></span><span class="mono">${formatNumber(m.total_spent)}</span></div>`
+    ).join("") || `<div class="muted">None</div>`;
+    body.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px;">
+        <div class="recurring-card"><div class="muted" style="font-size:0.75rem;">TOTAL INCOME</div><div class="mono text-credit" style="font-weight:700;">+${formatNumber(y.total_income)}</div></div>
+        <div class="recurring-card"><div class="muted" style="font-size:0.75rem;">TOTAL SPENT</div><div class="mono text-debt" style="font-weight:700;">-${formatNumber(y.total_spent)}</div></div>
+        <div class="recurring-card"><div class="muted" style="font-size:0.75rem;">NET SAVINGS</div><div class="mono" style="font-weight:700;">${Number(y.net_savings) >= 0 ? "+" : ""}${formatNumber(y.net_savings)}</div></div>
+        <div class="recurring-card"><div class="muted" style="font-size:0.75rem;">SAVINGS RATE</div><div class="mono" style="font-weight:700;">${y.savings_rate_pct != null ? `${y.savings_rate_pct}%` : "—"}</div></div>
+      </div>
+      <div class="muted" style="font-size:0.8rem;margin-bottom:10px;">
+        ${y.transaction_count} tx · Lowest spend: <strong>${escapeHtml(y.best_month || "—")}</strong> · Highest spend: <strong>${escapeHtml(y.busiest_month || "—")}</strong> · Biggest expense: <strong>${biggest}</strong>
+      </div>
+      <div class="trend-chart" style="height:105px;margin-bottom:14px;">${bars}</div>
+      <div class="mom-grid">
+        <div><div class="muted" style="font-size:0.76rem;font-weight:600;margin-bottom:6px;">TOP CATEGORIES (${y.year})</div>${topCats}</div>
+        <div><div class="muted" style="font-size:0.76rem;font-weight:600;margin-bottom:6px;">TOP MERCHANTS (${y.year})</div>${topMerch}</div>
+      </div>`;
+  }
+
+  async function loadMerchantProfile(vendor) {
+    const body = document.getElementById("merchant-profile-body");
+    const input = document.getElementById("merchant-profile-input");
+    if (!body || !vendor || !vendor.trim()) return;
+    if (input) input.value = vendor.trim();
+    body.innerHTML = `<div class="empty-block">Loading ${escapeHtml(vendor)}...</div>`;
+    try {
+      const p = await apiFetch(`/api/v1/spending/merchant?vendor=${encodeURIComponent(vendor.trim())}`);
+      if (!p || !p.visit_count) {
+        body.innerHTML = `<div class="empty-block">No spending found matching "${escapeHtml(vendor)}".</div>`;
+        return;
+      }
+      const recent = (p.recent_transactions || []).slice(0, 5).map((t) =>
+        `<div class="mom-row"><span class="mono muted">${escapeHtml(t.tx_date)}</span><span>${escapeHtml(t.vendor)}</span><span class="mono">${formatNumber(t.amount)} ${escapeHtml(t.currency)}</span></div>`
+      ).join("");
+      body.innerHTML = `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">
+          <div class="recurring-card"><div class="muted" style="font-size:0.72rem;">LIFETIME</div><div class="mono" style="font-weight:700;">${formatNumber(p.total_spent)}</div></div>
+          <div class="recurring-card"><div class="muted" style="font-size:0.72rem;">VISITS</div><div class="mono" style="font-weight:700;">${p.visit_count}x</div></div>
+          <div class="recurring-card"><div class="muted" style="font-size:0.72rem;">AVG TICKET</div><div class="mono" style="font-weight:700;">${formatNumber(p.avg_ticket)}</div></div>
+        </div>
+        <div class="muted" style="font-size:0.78rem;margin-bottom:8px;">
+          Range: <span class="mono">${formatNumber(p.min_amount)} – ${formatNumber(p.max_amount)} ${escapeHtml(p.base_currency)}</span> · ${escapeHtml(p.first_seen || "")} → ${escapeHtml(p.last_seen || "")}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">${recent}</div>`;
+    } catch (err) {
+      if (err.message !== "Unauthorized") body.innerHTML = `<div class="empty-block">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderSubscriptionAudit(audit) {
+    const badge = document.getElementById("subscription-annual-badge");
+    const listEl = document.getElementById("subscription-audit-list");
+    if (!audit) return;
+    if (badge) {
+      const pctStr = audit.pct_of_avg_income != null ? ` (${audit.pct_of_avg_income}% of income)` : "";
+      badge.textContent = `Annual: ${formatNumber(audit.annual_total)} ${audit.base_currency}/yr${pctStr}`;
+    }
+    if (!listEl) return;
+    const items = audit.items || [];
+    if (!items.length) {
+      listEl.innerHTML = "";
+      return;
+    }
+    listEl.innerHTML = `
+      <div class="muted" style="font-size:0.76rem;font-weight:600;margin-bottom:6px;">ANNUALIZED SUBSCRIPTION &amp; FIXED COST AUDIT</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${items.slice(0, 8).map((it) => `
+          <div class="mom-row">
+            <span>${escapeHtml(it.vendor)} <span class="muted">(${escapeHtml(it.category_name)} · ${it.occurrences}x)</span></span>
+            <span class="mono">${formatNumber(it.monthly_cost)}/mo · <strong>${formatNumber(it.annual_cost)}/yr</strong></span>
+          </div>`).join("")}
+      </div>`;
+  }
+
+  const merchantProfileForm = document.getElementById("merchant-profile-form");
+  if (merchantProfileForm) {
+    merchantProfileForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const val = document.getElementById("merchant-profile-input")?.value || "";
+      loadMerchantProfile(val);
+    });
+  }
+  document.addEventListener("click", (e) => {
+    const el = e.target.closest("[data-merchant-inspect]");
+    if (el) loadMerchantProfile(el.dataset.merchantInspect);
+  });
+
+  const btnYearlyPrev = document.getElementById("btn-yearly-prev");
+  const btnYearlyNext = document.getElementById("btn-yearly-next");
+  if (btnYearlyPrev) {
+    btnYearlyPrev.addEventListener("click", async () => {
+      state.wrappedYear = (state.wrappedYear || state.year) - 1;
+      const y = await apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear}`);
+      renderYearlyWrapped(y);
+    });
+  }
+  if (btnYearlyNext) {
+    btnYearlyNext.addEventListener("click", async () => {
+      state.wrappedYear = (state.wrappedYear || state.year) + 1;
+      const y = await apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear}`);
+      renderYearlyWrapped(y);
+    });
+  }
+
+  const btnSuggestBudgets = document.getElementById("btn-suggest-budgets");
+  const budgetSuggestionsEl = document.getElementById("budget-suggestions-list");
+  if (btnSuggestBudgets && budgetSuggestionsEl) {
+    btnSuggestBudgets.addEventListener("click", async () => {
+      btnSuggestBudgets.disabled = true;
+      try {
+        const res = await apiFetch("/api/v1/budgets/suggest");
+        const items = res?.suggestions || [];
+        budgetSuggestionsEl.classList.remove("hidden");
+        if (!items.length) {
+          budgetSuggestionsEl.innerHTML = `<div class="muted">Need recent spending history to suggest budgets.</div>`;
+        } else {
+          budgetSuggestionsEl.innerHTML = `<div class="muted" style="font-size:0.75rem;font-weight:600;">3-MONTH AVG SUGGESTIONS (1-CLICK APPLY)</div>` +
+            items.map((s) => `
+              <div class="mom-row">
+                <span>${escapeHtml(s.category_name)} <span class="muted">(avg ${formatNumber(s.avg_monthly_spent)})</span></span>
+                <span style="display:flex;align-items:center;gap:8px;">
+                  <span class="mono">${formatNumber(s.suggested_limit)} ${escapeHtml(res.base_currency)}</span>
+                  <button class="btn btn-ghost btn-sm" type="button" data-apply-budget-cat="${escapeHtml(s.category_name)}" data-apply-budget-amt="${escapeHtml(s.suggested_limit)}">Apply</button>
+                </span>
+              </div>`).join("");
+        }
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btnSuggestBudgets.disabled = false;
+      }
+    });
+    budgetSuggestionsEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-apply-budget-cat]");
+      if (!btn) return;
+      btn.disabled = true;
+      try {
+        await apiFetch("/api/v1/budgets", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category_name: btn.dataset.applyBudgetCat,
+            monthly_limit: btn.dataset.applyBudgetAmt,
+            currency: state.baseCurrency || "VND",
+            rollover: false,
+          }),
+        });
+        showToast(`Budget applied for ${btn.dataset.applyBudgetCat}`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btn.disabled = false;
+      }
+    });
   }
 
   // --- Bulk Selection & Actions (#4) ---

@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.spendingtracker.app.data.ApiClient
 import com.spendingtracker.app.data.BudgetRecord
+import com.spendingtracker.app.data.BudgetSuggestionsResponse
 import com.spendingtracker.app.data.BulkTransactionsRequest
 import com.spendingtracker.app.data.CachedDashboardSnapshot
 import com.spendingtracker.app.data.ChangePasswordRequest
@@ -27,6 +28,7 @@ import com.spendingtracker.app.data.IngestResponse
 import com.spendingtracker.app.data.IouRecord
 import com.spendingtracker.app.data.LoginRequest
 import com.spendingtracker.app.data.MediaUtils
+import com.spendingtracker.app.data.MerchantProfileResponse
 import com.spendingtracker.app.data.MerchantRuleRecord
 import com.spendingtracker.app.data.MonthlyComparisonResponse
 import com.spendingtracker.app.data.MonthlySpendingResponse
@@ -38,8 +40,10 @@ import com.spendingtracker.app.data.RangeSpendingResponse
 import com.spendingtracker.app.data.RecurringBillItem
 import com.spendingtracker.app.data.RecurringSummaryResponse
 import com.spendingtracker.app.data.RegisterRequest
+import com.spendingtracker.app.data.Rule503020Response
 import com.spendingtracker.app.data.SplitItemRequest
 import com.spendingtracker.app.data.SplitTransactionRequest
+import com.spendingtracker.app.data.SubscriptionAuditResponse
 import com.spendingtracker.app.data.TagSpending
 import com.spendingtracker.app.data.TokenStore
 import com.spendingtracker.app.data.TransactionRecord
@@ -52,6 +56,7 @@ import com.spendingtracker.app.data.UpsertMerchantRuleRequest
 import com.spendingtracker.app.data.UserPreferencesResponse
 import com.spendingtracker.app.data.WalletRecord
 import com.spendingtracker.app.data.WeekdayBreakdownResponse
+import com.spendingtracker.app.data.YearlyWrappedResponse
 import com.spendingtracker.app.data.ZeroBalanceRequest
 import com.spendingtracker.app.widget.SpendingWidgetProvider
 import kotlinx.coroutines.Dispatchers
@@ -91,6 +96,11 @@ data class UiState(
     val weekdayBreakdown: WeekdayBreakdownResponse? = null,
     val fxRates: FxRatesResponse? = null,
     val globalSearch: GlobalSearchResponse? = null,
+    val rule503020: Rule503020Response? = null,
+    val yearlyWrapped: YearlyWrappedResponse? = null,
+    val merchantProfile: MerchantProfileResponse? = null,
+    val budgetSuggestions: BudgetSuggestionsResponse? = null,
+    val subscriptionAudit: SubscriptionAuditResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -469,6 +479,10 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 val prefsRes = api.getPreferences()
                 val weekdayRes = api.getWeekdayBreakdown(3)
                 val fxRes = api.getFxRates()
+                val rule503020Res = api.getRule503020(ym.year, ym.monthValue)
+                val wrappedYear = _uiState.value.yearlyWrapped?.year ?: ym.year
+                val yearlyRes = api.getYearlyWrapped(wrappedYear)
+                val subAuditRes = api.getSubscriptionAudit()
 
                 if (summaryRes.code() == 401 || txRes.code() == 401) {
                     logout()
@@ -495,6 +509,9 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                             preferences = if (prefsRes.isSuccessful) prefsRes.body() else it.preferences,
                             weekdayBreakdown = if (weekdayRes.isSuccessful) weekdayRes.body() else it.weekdayBreakdown,
                             fxRates = if (fxRes.isSuccessful) fxRes.body() else it.fxRates,
+                            rule503020 = if (rule503020Res.isSuccessful) rule503020Res.body() else it.rule503020,
+                            yearlyWrapped = if (yearlyRes.isSuccessful) yearlyRes.body() else it.yearlyWrapped,
+                            subscriptionAudit = if (subAuditRes.isSuccessful) subAuditRes.body() else it.subscriptionAudit,
                             globalSearch = null,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
                             transactions = txRes.body().orEmpty(),
@@ -1153,6 +1170,50 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
     fun clearGlobalSearch() {
         _uiState.update { it.copy(globalSearch = null) }
         refreshDashboard()
+    }
+
+    // --- v1.8.0: Yearly Wrapped, Merchant Profile & Smart Budget Suggestions ---
+    fun loadYearlyWrapped(year: Int) {
+        viewModelScope.launch {
+            try {
+                val res = api.getYearlyWrapped(year)
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update { it.copy(yearlyWrapped = res.body()) }
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun loadMerchantProfile(vendor: String) {
+        val clean = vendor.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val res = api.getMerchantProfile(clean)
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update { it.copy(merchantProfile = res.body()) }
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Merchant lookup failed") }
+            }
+        }
+    }
+
+    fun loadBudgetSuggestions() {
+        viewModelScope.launch {
+            try {
+                val res = api.getBudgetSuggestions()
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update { it.copy(budgetSuggestions = res.body()) }
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Suggestions failed") }
+            }
+        }
     }
 
     // --- Merchant Rules (#6) ---

@@ -488,6 +488,107 @@ data class FxRatesResponse(
     @SerializedName("rates_vs_usd") val ratesVsUsd: Map<String, String> = emptyMap()
 )
 
+// --- v1.8.0: Yearly Wrapped, 50/30/20 Rule, Merchant Profile, Smart Budget Suggestions & Subscription Audit ---
+
+data class YearlyMonthItem(
+    val month: Int,
+    val label: String,
+    @SerializedName("total_spent") val totalSpent: String,
+    @SerializedName("total_income") val totalIncome: String,
+    val net: String,
+    @SerializedName("tx_count") val txCount: Long
+)
+
+data class YearlyBiggestExpense(
+    val vendor: String,
+    val amount: String,
+    @SerializedName("tx_date") val txDate: String,
+    @SerializedName("category_name") val categoryName: String
+)
+
+data class YearlyWrappedResponse(
+    val year: Int,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("total_income") val totalIncome: String = "0",
+    @SerializedName("net_savings") val netSavings: String = "0",
+    @SerializedName("savings_rate_pct") val savingsRatePct: Double? = null,
+    @SerializedName("transaction_count") val transactionCount: Long = 0,
+    @SerializedName("best_month") val bestMonth: String? = null,
+    @SerializedName("busiest_month") val busiestMonth: String? = null,
+    @SerializedName("biggest_expense") val biggestExpense: YearlyBiggestExpense? = null,
+    val months: List<YearlyMonthItem> = emptyList(),
+    @SerializedName("top_categories") val topCategories: List<CategorySpending> = emptyList(),
+    @SerializedName("top_merchants") val topMerchants: List<TopMerchantItem> = emptyList()
+)
+
+data class Rule503020Response(
+    val year: Int,
+    val month: Int,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("total_income") val totalIncome: String = "0",
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("needs_amount") val needsAmount: String = "0",
+    @SerializedName("wants_amount") val wantsAmount: String = "0",
+    @SerializedName("savings_amount") val savingsAmount: String = "0",
+    @SerializedName("needs_pct") val needsPct: Double = 0.0,
+    @SerializedName("wants_pct") val wantsPct: Double = 0.0,
+    @SerializedName("savings_pct") val savingsPct: Double = 0.0,
+    @SerializedName("needs_categories") val needsCategories: List<String> = emptyList(),
+    @SerializedName("wants_categories") val wantsCategories: List<String> = emptyList()
+)
+
+data class MerchantMonthPoint(
+    val year: Int,
+    val month: Int,
+    @SerializedName("total_spent") val totalSpent: String,
+    @SerializedName("tx_count") val txCount: Long
+)
+
+data class MerchantProfileResponse(
+    val vendor: String,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("visit_count") val visitCount: Long = 0,
+    @SerializedName("avg_ticket") val avgTicket: String = "0",
+    @SerializedName("min_amount") val minAmount: String = "0",
+    @SerializedName("max_amount") val maxAmount: String = "0",
+    @SerializedName("first_seen") val firstSeen: String? = null,
+    @SerializedName("last_seen") val lastSeen: String? = null,
+    @SerializedName("monthly_history") val monthlyHistory: List<MerchantMonthPoint> = emptyList(),
+    @SerializedName("recent_transactions") val recentTransactions: List<TransactionRecord> = emptyList()
+)
+
+data class BudgetSuggestionItem(
+    @SerializedName("category_name") val categoryName: String,
+    @SerializedName("avg_monthly_spent") val avgMonthlySpent: String,
+    @SerializedName("suggested_limit") val suggestedLimit: String,
+    @SerializedName("current_limit") val currentLimit: String? = null
+)
+
+data class BudgetSuggestionsResponse(
+    @SerializedName("months_analyzed") val monthsAnalyzed: Int = 3,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    val suggestions: List<BudgetSuggestionItem> = emptyList()
+)
+
+data class SubscriptionAuditItem(
+    val vendor: String,
+    @SerializedName("category_name") val categoryName: String,
+    @SerializedName("monthly_cost") val monthlyCost: String,
+    @SerializedName("annual_cost") val annualCost: String,
+    val occurrences: Long,
+    @SerializedName("last_date") val lastDate: String
+)
+
+data class SubscriptionAuditResponse(
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("monthly_total") val monthlyTotal: String = "0",
+    @SerializedName("annual_total") val annualTotal: String = "0",
+    @SerializedName("pct_of_avg_income") val pctOfAvgIncome: Double? = null,
+    val items: List<SubscriptionAuditItem> = emptyList()
+)
+
 // --- Error ---
 
 data class ApiErrorEnvelope(

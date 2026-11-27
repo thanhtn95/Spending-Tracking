@@ -753,3 +753,124 @@ pub struct FxRatesResponse {
     pub base_currency: String,
     pub rates_vs_usd: std::collections::HashMap<String, Decimal>,
 }
+
+// --- v1.8.0: Yearly Wrapped, 50/30/20 Rule, Merchant Profile, Smart Budget Suggestions & Subscription Audit ---
+
+#[derive(Debug, Deserialize)]
+pub struct YearlyWrappedQuery {
+    pub year: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct YearlyMonthItem {
+    pub month: u32,
+    pub label: String,
+    pub total_spent: Decimal,
+    pub total_income: Decimal,
+    pub net: Decimal,
+    pub tx_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct YearlyBiggestExpense {
+    pub vendor: String,
+    pub amount: Decimal,
+    pub tx_date: NaiveDate,
+    pub category_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct YearlyWrappedResponse {
+    pub year: i32,
+    pub base_currency: String,
+    pub total_spent: Decimal,
+    pub total_income: Decimal,
+    pub net_savings: Decimal,
+    pub savings_rate_pct: Option<f64>,
+    pub transaction_count: i64,
+    pub best_month: Option<String>,
+    pub busiest_month: Option<String>,
+    pub biggest_expense: Option<YearlyBiggestExpense>,
+    pub months: Vec<YearlyMonthItem>,
+    pub top_categories: Vec<CategorySpending>,
+    pub top_merchants: Vec<TopMerchantItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Rule503020Response {
+    pub year: i32,
+    pub month: u32,
+    pub base_currency: String,
+    pub total_income: Decimal,
+    pub total_spent: Decimal,
+    pub needs_amount: Decimal,
+    pub wants_amount: Decimal,
+    pub savings_amount: Decimal,
+    pub needs_pct: f64,
+    pub wants_pct: f64,
+    pub savings_pct: f64,
+    pub needs_categories: Vec<String>,
+    pub wants_categories: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MerchantProfileQuery {
+    pub vendor: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MerchantMonthPoint {
+    pub year: i32,
+    pub month: u32,
+    pub total_spent: Decimal,
+    pub tx_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MerchantProfileResponse {
+    pub vendor: String,
+    pub base_currency: String,
+    pub total_spent: Decimal,
+    pub visit_count: i64,
+    pub avg_ticket: Decimal,
+    pub min_amount: Decimal,
+    pub max_amount: Decimal,
+    pub first_seen: Option<NaiveDate>,
+    pub last_seen: Option<NaiveDate>,
+    pub monthly_history: Vec<MerchantMonthPoint>,
+    pub recent_transactions: Vec<TransactionRecord>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BudgetSuggestionItem {
+    pub category_name: String,
+    pub avg_monthly_spent: Decimal,
+    pub suggested_limit: Decimal,
+    pub current_limit: Option<Decimal>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BudgetSuggestionsResponse {
+    pub months_analyzed: u32,
+    pub base_currency: String,
+    pub suggestions: Vec<BudgetSuggestionItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubscriptionAuditItem {
+    pub vendor: String,
+    pub category_name: String,
+    pub monthly_cost: Decimal,
+    pub annual_cost: Decimal,
+    pub occurrences: i64,
+    pub last_date: NaiveDate,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubscriptionAuditResponse {
+    pub base_currency: String,
+    pub monthly_total: Decimal,
+    pub annual_total: Decimal,
+    pub pct_of_avg_income: Option<f64>,
+    pub items: Vec<SubscriptionAuditItem>,
+}

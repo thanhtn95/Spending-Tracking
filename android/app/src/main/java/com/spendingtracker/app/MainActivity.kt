@@ -324,6 +324,10 @@ class MainActivity : FragmentActivity() {
                         onUndoDeleteTx = { tx -> viewModel.restoreDeletedTransaction(tx) },
                         onGlobalSearchClick = { q, minA -> viewModel.runGlobalSearch(q, minA) },
                         onClearGlobalSearchClick = { viewModel.clearGlobalSearch() },
+                        onYearlyWrappedYearChange = { yr -> viewModel.loadYearlyWrapped(yr) },
+                        onInspectMerchant = { vendor -> viewModel.loadMerchantProfile(vendor) },
+                        onSuggestBudgetsClick = { viewModel.loadBudgetSuggestions() },
+                        onApplyBudgetSuggestion = { cat, amt -> viewModel.upsertBudget(cat, amt, false) },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

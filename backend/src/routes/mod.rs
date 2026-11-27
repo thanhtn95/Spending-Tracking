@@ -184,6 +184,27 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/fx/rates",
             get(extras::get_fx_rates),
         )
+        // v1.8.0: Yearly Wrapped, 50/30/20 Rule, Merchant Profile, Smart Budget Suggest, Subscription Audit
+        .route(
+            "/api/v1/spending/yearly",
+            get(extras::yearly_wrapped),
+        )
+        .route(
+            "/api/v1/spending/rule-50-30-20",
+            get(extras::rule_50_30_20),
+        )
+        .route(
+            "/api/v1/spending/merchant",
+            get(extras::merchant_profile),
+        )
+        .route(
+            "/api/v1/budgets/suggest",
+            get(extras::suggest_budgets),
+        )
+        .route(
+            "/api/v1/spending/subscriptions",
+            get(extras::subscription_audit),
+        )
         .route(
             "/api/v1/tags",
             get(extras::list_tags),

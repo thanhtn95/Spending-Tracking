@@ -298,11 +298,53 @@
             </div>
           </div>
           <div>
-            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:8px;">TOP 5 MERCHANTS</div>
+            <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:8px;">TOP 5 MERCHANTS (CLICK TO INSPECT)</div>
             <div id="top-merchants-list" style="display:flex;flex-direction:column;gap:6px;">
               <div class="empty-block">No merchants this month.</div>
             </div>
           </div>
+        </div>
+      </section>
+
+      <!-- v1.8.0: 50/30/20 Rule & Merchant Lifetime Profile -->
+      <div class="grid-main" style="margin-bottom:20px;">
+        <section class="card">
+          <div class="section-head">
+            <h2>50 / 30 / 20 Rule</h2>
+            <span id="rule503020-badge" class="badge-subtle mono">Needs · Wants · Savings</span>
+          </div>
+          <div id="rule503020-body">
+            <div class="empty-block">Loading 50/30/20 breakdown...</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>Merchant Lifetime Profile</h2>
+            <span class="muted">All-time stats</span>
+          </div>
+          <form id="merchant-profile-form" style="display:flex;gap:8px;margin-bottom:12px;">
+            <input id="merchant-profile-input" type="text" placeholder="Search merchant (e.g. Grab, Starbucks)..." />
+            <button class="btn btn-primary btn-sm" type="submit">Inspect</button>
+          </form>
+          <div id="merchant-profile-body">
+            <div class="empty-block">Click any Top Merchant or search a vendor name above to inspect lifetime spend, visits, and average ticket.</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- v1.8.0: Annual Year-in-Review ("Wrapped") -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2 id="yearly-wrapped-title">Year in Review</h2>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="btn-yearly-prev" class="btn btn-ghost btn-sm" type="button">&lsaquo;</button>
+            <span id="yearly-wrapped-year" class="badge-subtle mono">2026</span>
+            <button id="btn-yearly-next" class="btn btn-ghost btn-sm" type="button">&rsaquo;</button>
+          </div>
+        </div>
+        <div id="yearly-wrapped-body">
+          <div class="empty-block">Loading annual summary...</div>
         </div>
       </section>
 
@@ -337,9 +379,11 @@
             </label>
             <button class="btn btn-ghost btn-sm" type="submit">Set</button>
           </form>
-          <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+          <div style="margin-top:10px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <button id="btn-suggest-budgets" class="btn btn-ghost btn-sm" type="button">✨ Suggest from 3M Avg</button>
             <button id="btn-new-category" class="btn btn-ghost btn-sm" type="button">+ New Category</button>
           </div>
+          <div id="budget-suggestions-list" class="hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px;"></div>
         </section>
       </div>
 
@@ -347,11 +391,15 @@
       <section class="card">
         <div class="section-head">
           <h2>Recurring Bills &amp; Subscriptions</h2>
-          <span id="recurring-total" class="badge-subtle mono">Fixed: 0 / mo</span>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <span id="recurring-total" class="badge-subtle mono">Fixed: 0 / mo</span>
+            <span id="subscription-annual-badge" class="badge-subtle mono">Annual: 0 / yr</span>
+          </div>
         </div>
         <div id="recurring-list" class="recurring-grid">
           <div class="empty-block">No recurring bills detected yet. Mark any transaction as recurring or upload 2+ months of statements.</div>
         </div>
+        <div id="subscription-audit-list" style="margin-top:12px;"></div>
       </section>
 
       <!-- AI Monthly Coach -->

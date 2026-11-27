@@ -2,16 +2,19 @@ use crate::{
     error::AppError,
     models::{
         BackupBudget, BackupGoal, BackupImportResponse, BackupIou, BackupPayload, BackupRule,
-        BackupTemplate, BackupTransaction, BackupWallet, BulkTransactionsRequest,
-        BulkTransactionsResponse, CategoryMomChange, CategorySpending,
-        CreateDraftNotificationRequest, CreateTemplateRequest, CreateWalletRequest,
-        ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery, GlobalSearchResponse,
+        BackupTemplate, BackupTransaction, BackupWallet, BudgetSuggestionItem,
+        BudgetSuggestionsResponse, BulkTransactionsRequest, BulkTransactionsResponse,
+        CategoryMomChange, CategorySpending, CreateDraftNotificationRequest, CreateTemplateRequest,
+        CreateWalletRequest, ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery,
+        GlobalSearchResponse, MerchantMonthPoint, MerchantProfileQuery, MerchantProfileResponse,
         MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, NetWorthPoint,
-        QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse, SpendingAlertItem,
-        SplitTransactionRequest, TagSpending, TopMerchantItem, TransactionRecord,
+        QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse, Rule503020Response,
+        SpendingAlertItem, SplitTransactionRequest, SubscriptionAuditItem,
+        SubscriptionAuditResponse, TagSpending, TopMerchantItem, TransactionRecord,
         TransferWalletRequest, TransferWalletResponse, UpdatePreferencesRequest,
         UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
-        WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem,
+        WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem, YearlyBiggestExpense,
+        YearlyMonthItem, YearlyWrappedQuery, YearlyWrappedResponse,
     },
     routes::AppState,
     services::{
@@ -24,7 +27,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use chrono::Utc;
+use chrono::{Datelike, NaiveDate, Utc};
 use rust_decimal::Decimal;
 use uuid::Uuid;
 
@@ -2275,6 +2278,614 @@ pub async fn get_fx_rates(
     Ok(Json(FxRatesResponse {
         base_currency: state.config.default_currency.clone(),
         rates_vs_usd,
+    }))
+}
+
+// ================================
+// v1.8.0: Annual Year-in-Review ("Wrapped")
+// ================================
+
+pub async fn yearly_wrapped(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<YearlyWrappedQuery>,
+) -> Result<Json<YearlyWrappedResponse>, AppError> {
+    let year = params.year.unwrap_or_else(|| Utc::now().year());
+    let start_date = NaiveDate::from_ymd_opt(year, 1, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year".to_string()))?;
+    let end_date = NaiveDate::from_ymd_opt(year + 1, 1, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year".to_string()))?;
+
+    let monthly_rows: Vec<(i32, Decimal, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT
+            EXTRACT(MONTH FROM tx_date)::INT AS m,
+            COALESCE(SUM(CASE WHEN tx_type = 'debit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0) AS spent,
+            COALESCE(SUM(CASE WHEN tx_type = 'credit' THEN COALESCE(base_amount, amount) ELSE 0 END), 0) AS income,
+            COUNT(*) AS cnt
+        FROM transactions
+        WHERE user_id = $1
+          AND status = 'confirmed'
+          AND is_transfer = FALSE
+          AND tx_date >= $2
+          AND tx_date < $3
+        GROUP BY 1
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    let month_labels = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut months = Vec::with_capacity(12);
+    let mut total_spent = Decimal::ZERO;
+    let mut total_income = Decimal::ZERO;
+    let mut transaction_count: i64 = 0;
+    let mut best_month: Option<String> = None;
+    let mut best_spent: Option<Decimal> = None;
+    let mut busiest_month: Option<String> = None;
+    let mut busiest_spent = Decimal::ZERO;
+
+    for (idx, lbl) in month_labels.iter().enumerate() {
+        let m = (idx + 1) as i32;
+        let found = monthly_rows.iter().find(|r| r.0 == m);
+        let spent = found.map(|r| r.1).unwrap_or(Decimal::ZERO);
+        let income = found.map(|r| r.2).unwrap_or(Decimal::ZERO);
+        let cnt = found.map(|r| r.3).unwrap_or(0);
+        total_spent += spent;
+        total_income += income;
+        transaction_count += cnt;
+        if spent > Decimal::ZERO {
+            if best_spent.map(|b| spent < b).unwrap_or(true) {
+                best_spent = Some(spent);
+                best_month = Some((*lbl).to_string());
+            }
+            if spent > busiest_spent {
+                busiest_spent = spent;
+                busiest_month = Some((*lbl).to_string());
+            }
+        }
+        months.push(YearlyMonthItem {
+            month: m as u32,
+            label: (*lbl).to_string(),
+            total_spent: spent,
+            total_income: income,
+            net: income - spent,
+            tx_count: cnt,
+        });
+    }
+
+    let top_categories: Vec<CategorySpending> = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(c.name, 'Uncategorized') AS category_name,
+            COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total_spent,
+            COUNT(*) AS transaction_count
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+          AND t.tx_date < $3
+        GROUP BY 1
+        ORDER BY total_spent DESC
+        LIMIT 5
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    let top_merchants: Vec<TopMerchantItem> = sqlx::query_as(
+        r#"
+        SELECT
+            t.vendor,
+            COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total_spent,
+            COUNT(*) AS transaction_count
+        FROM transactions t
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+          AND t.tx_date < $3
+        GROUP BY t.vendor
+        ORDER BY total_spent DESC
+        LIMIT 5
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    let biggest_row: Option<(String, Decimal, NaiveDate, String)> = sqlx::query_as(
+        r#"
+        SELECT
+            t.vendor,
+            COALESCE(t.base_amount, t.amount) AS amt,
+            t.tx_date,
+            COALESCE(c.name, 'Uncategorized') AS category_name
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+          AND t.tx_date < $3
+        ORDER BY amt DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let biggest_expense = biggest_row.map(|(vendor, amount, tx_date, category_name)| {
+        YearlyBiggestExpense {
+            vendor,
+            amount,
+            tx_date,
+            category_name,
+        }
+    });
+
+    let net_savings = total_income - total_spent;
+    let savings_rate_pct = if total_income > Decimal::ZERO {
+        let rate = (net_savings / total_income) * Decimal::from(100);
+        Some((rate.to_string().parse::<f64>().unwrap_or(0.0) * 10.0).round() / 10.0)
+    } else {
+        None
+    };
+
+    Ok(Json(YearlyWrappedResponse {
+        year,
+        base_currency: state.config.default_currency.clone(),
+        total_spent,
+        total_income,
+        net_savings,
+        savings_rate_pct,
+        transaction_count,
+        best_month,
+        busiest_month,
+        biggest_expense,
+        months,
+        top_categories,
+        top_merchants,
+    }))
+}
+
+// ================================
+// v1.8.0: 50/30/20 Rule Breakdown
+// ================================
+
+fn is_need_category(name: &str) -> bool {
+    matches!(
+        name.trim().to_lowercase().as_str(),
+        "groceries"
+            | "utilities"
+            | "housing"
+            | "rent"
+            | "health"
+            | "medical"
+            | "transport"
+            | "education"
+            | "insurance"
+            | "debt repayment"
+            | "family & kids"
+            | "fees & interest"
+            | "bills"
+    )
+}
+
+pub async fn rule_50_30_20(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<MonthlyQuery>,
+) -> Result<Json<Rule503020Response>, AppError> {
+    let start_date = NaiveDate::from_ymd_opt(params.year, params.month, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid year or month".to_string()))?;
+    let end_date = if params.month == 12 {
+        NaiveDate::from_ymd_opt(params.year + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(params.year, params.month + 1, 1)
+    }
+    .ok_or_else(|| AppError::BadRequest("Invalid year or month".to_string()))?;
+
+    let total_income: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND status = 'confirmed'
+          AND is_transfer = FALSE
+          AND tx_type = 'credit'
+          AND tx_date >= $2
+          AND tx_date < $3
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_one(&state.db)
+    .await?;
+
+    let rows: Vec<(String, Decimal)> = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(c.name, 'Uncategorized') AS category_name,
+            COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+          AND t.tx_date < $3
+        GROUP BY 1
+        ORDER BY total DESC
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(start_date)
+    .bind(end_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut needs_amount = Decimal::ZERO;
+    let mut wants_amount = Decimal::ZERO;
+    let mut needs_categories = Vec::new();
+    let mut wants_categories = Vec::new();
+
+    for (cat, amt) in rows {
+        if is_need_category(&cat) {
+            needs_amount += amt;
+            needs_categories.push(cat);
+        } else {
+            wants_amount += amt;
+            wants_categories.push(cat);
+        }
+    }
+
+    let total_spent = needs_amount + wants_amount;
+    let savings_amount = if total_income > total_spent {
+        total_income - total_spent
+    } else {
+        Decimal::ZERO
+    };
+    let denom = if total_income > Decimal::ZERO {
+        total_income
+    } else {
+        total_spent
+    };
+
+    let to_pct = |v: Decimal| -> f64 {
+        if denom <= Decimal::ZERO {
+            return 0.0;
+        }
+        let p = ((v / denom) * Decimal::from(100))
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        (p * 10.0).round() / 10.0
+    };
+
+    Ok(Json(Rule503020Response {
+        year: params.year,
+        month: params.month,
+        base_currency: state.config.default_currency.clone(),
+        total_income,
+        total_spent,
+        needs_amount,
+        wants_amount,
+        savings_amount,
+        needs_pct: to_pct(needs_amount),
+        wants_pct: to_pct(wants_amount),
+        savings_pct: to_pct(savings_amount),
+        needs_categories,
+        wants_categories,
+    }))
+}
+
+// ================================
+// v1.8.0: Merchant Lifetime Profile & History
+// ================================
+
+pub async fn merchant_profile(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<MerchantProfileQuery>,
+) -> Result<Json<MerchantProfileResponse>, AppError> {
+    let vendor = params.vendor.trim().to_string();
+    if vendor.is_empty() {
+        return Err(AppError::BadRequest("vendor is required".to_string()));
+    }
+    let pattern = format!("%{}%", vendor.to_lowercase());
+
+    let stats: (Decimal, i64, Decimal, Decimal, Option<NaiveDate>, Option<NaiveDate>) =
+        sqlx::query_as(
+            r#"
+            SELECT
+                COALESCE(SUM(COALESCE(base_amount, amount)), 0),
+                COUNT(*),
+                COALESCE(MIN(COALESCE(base_amount, amount)), 0),
+                COALESCE(MAX(COALESCE(base_amount, amount)), 0),
+                MIN(tx_date),
+                MAX(tx_date)
+            FROM transactions
+            WHERE user_id = $1
+              AND status = 'confirmed'
+              AND is_transfer = FALSE
+              AND tx_type = 'debit'
+              AND LOWER(vendor) LIKE $2
+            "#,
+        )
+        .bind(auth.user_id)
+        .bind(&pattern)
+        .fetch_one(&state.db)
+        .await?;
+
+    let (total_spent, visit_count, min_amount, max_amount, first_seen, last_seen) = stats;
+    let avg_ticket = if visit_count > 0 {
+        (total_spent / Decimal::from(visit_count)).round_dp(2)
+    } else {
+        Decimal::ZERO
+    };
+
+    let monthly_rows: Vec<(i32, i32, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT
+            EXTRACT(YEAR FROM tx_date)::INT AS y,
+            EXTRACT(MONTH FROM tx_date)::INT AS m,
+            COALESCE(SUM(COALESCE(base_amount, amount)), 0) AS total,
+            COUNT(*) AS cnt
+        FROM transactions
+        WHERE user_id = $1
+          AND status = 'confirmed'
+          AND is_transfer = FALSE
+          AND tx_type = 'debit'
+          AND LOWER(vendor) LIKE $2
+        GROUP BY 1, 2
+        ORDER BY 1 DESC, 2 DESC
+        LIMIT 6
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&pattern)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut monthly_history: Vec<MerchantMonthPoint> = monthly_rows
+        .into_iter()
+        .map(|(y, m, total_spent, tx_count)| MerchantMonthPoint {
+            year: y,
+            month: m as u32,
+            total_spent,
+            tx_count,
+        })
+        .collect();
+    monthly_history.reverse();
+
+    let recent_transactions: Vec<TransactionRecord> = sqlx::query_as(
+        r#"
+        SELECT
+            t.id, t.document_id, t.tx_date, t.vendor, t.description,
+            t.category_id, c.name AS category_name,
+            t.wallet_id, w.name AS wallet_name,
+            t.amount, t.base_amount, t.tx_type, t.currency, t.source, t.status,
+            t.is_recurring, t.is_transfer, t.tags, t.created_at
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN wallets w ON w.id = t.wallet_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND LOWER(t.vendor) LIKE $2
+        ORDER BY t.tx_date DESC, t.created_at DESC
+        LIMIT 15
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&pattern)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(MerchantProfileResponse {
+        vendor,
+        base_currency: state.config.default_currency.clone(),
+        total_spent,
+        visit_count,
+        avg_ticket,
+        min_amount,
+        max_amount,
+        first_seen,
+        last_seen,
+        monthly_history,
+        recent_transactions,
+    }))
+}
+
+// ================================
+// v1.8.0: Smart Budget Auto-Suggest (3-Month Average)
+// ================================
+
+fn round_suggested_budget(avg: Decimal, currency: &str) -> Decimal {
+    let val = avg.to_string().parse::<f64>().unwrap_or(0.0);
+    if val <= 0.0 {
+        return Decimal::ZERO;
+    }
+    let step = if currency.eq_ignore_ascii_case("VND") {
+        if val >= 500_000.0 {
+            100_000.0
+        } else if val >= 50_000.0 {
+            50_000.0
+        } else {
+            10_000.0
+        }
+    } else if val >= 100.0 {
+        10.0
+    } else {
+        5.0
+    };
+    let rounded = (val / step).ceil() * step;
+    Decimal::from(rounded as i64)
+}
+
+pub async fn suggest_budgets(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<BudgetSuggestionsResponse>, AppError> {
+    let months_analyzed: u32 = 3;
+    let cutoff = Utc::now().date_naive() - chrono::Duration::days(90);
+    let cur = state.config.default_currency.clone();
+
+    let rows: Vec<(String, Decimal, Option<Decimal>)> = sqlx::query_as(
+        r#"
+        SELECT
+            COALESCE(c.name, 'Uncategorized') AS category_name,
+            COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total_90d,
+            MAX(b.monthly_limit) AS current_limit
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN budgets b ON b.user_id = $1 AND b.category_id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+        GROUP BY 1
+        HAVING COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) > 0
+        ORDER BY total_90d DESC
+        LIMIT 12
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+
+    let suggestions = rows
+        .into_iter()
+        .map(|(category_name, total_90d, current_limit)| {
+            let avg = (total_90d / Decimal::from(months_analyzed)).round_dp(0);
+            let suggested_limit = round_suggested_budget(avg, &cur);
+            BudgetSuggestionItem {
+                category_name,
+                avg_monthly_spent: avg,
+                suggested_limit,
+                current_limit,
+            }
+        })
+        .collect();
+
+    Ok(Json(BudgetSuggestionsResponse {
+        months_analyzed,
+        base_currency: cur,
+        suggestions,
+    }))
+}
+
+// ================================
+// v1.8.0: Subscription & Recurring Cost Audit
+// ================================
+
+pub async fn subscription_audit(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<SubscriptionAuditResponse>, AppError> {
+    let cutoff = Utc::now().date_naive() - chrono::Duration::days(180);
+    let cur = state.config.default_currency.clone();
+
+    let rows: Vec<(String, String, Decimal, i64, NaiveDate)> = sqlx::query_as(
+        r#"
+        SELECT
+            MIN(t.vendor) AS vendor,
+            COALESCE(MAX(c.name), 'Subscriptions') AS category_name,
+            ROUND(AVG(COALESCE(t.base_amount, t.amount)), 0) AS monthly_cost,
+            COUNT(*) AS occurrences,
+            MAX(t.tx_date) AS last_date
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND t.tx_date >= $2
+        GROUP BY LOWER(TRIM(t.vendor))
+        HAVING BOOL_OR(t.is_recurring)
+            OR COUNT(DISTINCT DATE_TRUNC('month', t.tx_date)) >= 2
+        ORDER BY monthly_cost DESC
+        LIMIT 20
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut monthly_total = Decimal::ZERO;
+    let mut items = Vec::with_capacity(rows.len());
+    for (vendor, category_name, monthly_cost, occurrences, last_date) in rows {
+        let annual_cost = monthly_cost * Decimal::from(12);
+        monthly_total += monthly_cost;
+        items.push(SubscriptionAuditItem {
+            vendor,
+            category_name,
+            monthly_cost,
+            annual_cost,
+            occurrences,
+            last_date,
+        });
+    }
+    let annual_total = monthly_total * Decimal::from(12);
+
+    let income_90d: Decimal = sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(SUM(COALESCE(base_amount, amount)), 0)
+        FROM transactions
+        WHERE user_id = $1
+          AND status = 'confirmed'
+          AND is_transfer = FALSE
+          AND tx_type = 'credit'
+          AND tx_date >= $2
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(Utc::now().date_naive() - chrono::Duration::days(90))
+    .fetch_one(&state.db)
+    .await?;
+
+    let avg_monthly_income = income_90d / Decimal::from(3);
+    let pct_of_avg_income = if avg_monthly_income > Decimal::ZERO {
+        let p = ((monthly_total / avg_monthly_income) * Decimal::from(100))
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        Some((p * 10.0).round() / 10.0)
+    } else {
+        None
+    };
+
+    Ok(Json(SubscriptionAuditResponse {
+        base_currency: cur,
+        monthly_total,
+        annual_total,
+        pct_of_avg_income,
+        items,
     }))
 }
 

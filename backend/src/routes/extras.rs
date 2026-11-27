@@ -2,9 +2,10 @@ use crate::{
     error::AppError,
     models::{
         BackupBudget, BackupGoal, BackupImportResponse, BackupIou, BackupPayload, BackupRule,
-        BackupTemplate, BackupTransaction, BackupWallet, CategorySpending, CreateTemplateRequest,
-        CreateWalletRequest, MerchantRuleRecord, QuickTemplateRecord, RangeSpendingQuery,
-        RangeSpendingResponse, TagSpending, TransactionRecord, TransferWalletRequest,
+        BackupTemplate, BackupTransaction, BackupWallet, CategorySpending,
+        CreateDraftNotificationRequest, CreateTemplateRequest, CreateWalletRequest,
+        MerchantRuleRecord, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
+        SplitTransactionRequest, TagSpending, TransactionRecord, TransferWalletRequest,
         TransferWalletResponse, UpsertMerchantRuleRequest, WalletRecord,
     },
     routes::AppState,
@@ -1252,6 +1253,263 @@ pub async fn import_backup(
         transactions_added,
         transactions_skipped,
     }))
+}
+
+// ================================
+// Split Transaction Across Categories (#5)
+// ================================
+
+pub async fn split_transaction(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(payload): Json<SplitTransactionRequest>,
+) -> Result<Json<Vec<TransactionRecord>>, AppError> {
+    if payload.items.len() < 2 {
+        return Err(AppError::BadRequest(
+            "Provide at least 2 split items".to_string(),
+        ));
+    }
+    let mut split_sum = Decimal::ZERO;
+    for item in &payload.items {
+        if item.amount <= Decimal::ZERO {
+            return Err(AppError::BadRequest(
+                "Each split amount must be greater than zero".to_string(),
+            ));
+        }
+        split_sum += item.amount;
+    }
+
+    let mut db_tx = state.db.begin().await?;
+
+    let orig: Option<TransactionRecord> = sqlx::query_as(
+        r#"
+        SELECT
+            t.id, t.document_id, t.tx_date, t.vendor, t.description,
+            t.category_id, c.name AS category_name,
+            t.wallet_id, w.name AS wallet_name,
+            t.amount, t.base_amount, t.tx_type, t.currency, t.source, t.status,
+            t.is_recurring, t.is_transfer, t.tags, t.created_at
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN wallets w ON w.id = t.wallet_id
+        WHERE t.id = $1 AND t.user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(auth.user_id)
+    .fetch_optional(&mut *db_tx)
+    .await?;
+
+    let Some(orig) = orig else {
+        return Err(AppError::NotFound(format!("Transaction {id} not found")));
+    };
+
+    let diff = (split_sum - orig.amount).abs();
+    if diff > Decimal::new(1, 2) {
+        return Err(AppError::BadRequest(format!(
+            "Split amounts ({split_sum}) must sum to original amount ({})",
+            orig.amount
+        )));
+    }
+
+    let fx_ratio = if orig.amount > Decimal::ZERO {
+        orig.base_amount.unwrap_or(orig.amount) / orig.amount
+    } else {
+        Decimal::ONE
+    };
+
+    let mut result_records: Vec<TransactionRecord> = Vec::with_capacity(payload.items.len());
+
+    // Update original row with items[0]
+    let first = &payload.items[0];
+    let first_cid = resolve_category_id(&mut db_tx, Some(&first.category_name)).await?;
+    let first_base = (first.amount * fx_ratio).round_dp(2);
+    let first_desc = first
+        .description
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .or_else(|| orig.description.clone());
+
+    let updated_first: TransactionRecord = sqlx::query_as(
+        r#"
+        WITH updated AS (
+            UPDATE transactions
+            SET category_id = $3,
+                amount = $4,
+                base_amount = $5,
+                description = $6
+            WHERE id = $1 AND user_id = $2
+            RETURNING *
+        )
+        SELECT
+            u.id, u.document_id, u.tx_date, u.vendor, u.description,
+            u.category_id, c.name AS category_name,
+            u.wallet_id, w.name AS wallet_name,
+            u.amount, u.base_amount, u.tx_type, u.currency, u.source, u.status,
+            u.is_recurring, u.is_transfer, u.tags, u.created_at
+        FROM updated u
+        LEFT JOIN categories c ON c.id = u.category_id
+        LEFT JOIN wallets w ON w.id = u.wallet_id
+        "#,
+    )
+    .bind(orig.id)
+    .bind(auth.user_id)
+    .bind(first_cid)
+    .bind(first.amount)
+    .bind(first_base)
+    .bind(&first_desc)
+    .fetch_one(&mut *db_tx)
+    .await?;
+    result_records.push(updated_first);
+
+    // Insert remaining items[1..]
+    for item in payload.items.iter().skip(1) {
+        let cid = resolve_category_id(&mut db_tx, Some(&item.category_name)).await?;
+        let base_amt = (item.amount * fx_ratio).round_dp(2);
+        let desc = item
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .or_else(|| orig.description.clone());
+
+        let inserted: TransactionRecord = sqlx::query_as(
+            r#"
+            WITH inserted AS (
+                INSERT INTO transactions (
+                    user_id, document_id, tx_date, vendor, description, category_id, wallet_id,
+                    amount, base_amount, tx_type, currency, source, status, is_recurring, is_transfer, tags
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                RETURNING *
+            )
+            SELECT
+                i.id, i.document_id, i.tx_date, i.vendor, i.description,
+                i.category_id, c.name AS category_name,
+                i.wallet_id, w.name AS wallet_name,
+                i.amount, i.base_amount, i.tx_type, i.currency, i.source, i.status,
+                i.is_recurring, i.is_transfer, i.tags, i.created_at
+            FROM inserted i
+            LEFT JOIN categories c ON c.id = i.category_id
+            LEFT JOIN wallets w ON w.id = i.wallet_id
+            "#,
+        )
+        .bind(auth.user_id)
+        .bind(orig.document_id)
+        .bind(orig.tx_date)
+        .bind(&orig.vendor)
+        .bind(&desc)
+        .bind(cid)
+        .bind(orig.wallet_id)
+        .bind(item.amount)
+        .bind(base_amt)
+        .bind(&orig.tx_type)
+        .bind(&orig.currency)
+        .bind(&orig.source)
+        .bind(&orig.status)
+        .bind(orig.is_recurring)
+        .bind(orig.is_transfer)
+        .bind(&orig.tags)
+        .fetch_one(&mut *db_tx)
+        .await?;
+        result_records.push(inserted);
+    }
+
+    db_tx.commit().await?;
+    Ok(Json(result_records))
+}
+
+// ================================
+// On-Device Bank Notification Draft Capture (#1)
+// ================================
+
+pub async fn create_notification_draft(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateDraftNotificationRequest>,
+) -> Result<(StatusCode, Json<TransactionRecord>), AppError> {
+    let vendor = payload.vendor.trim();
+    if vendor.is_empty() || payload.amount <= Decimal::ZERO {
+        return Err(AppError::BadRequest(
+            "Valid vendor and positive amount are required".to_string(),
+        ));
+    }
+    let tx_type = match payload.tx_type.as_deref().map(str::trim) {
+        Some(t) if t.eq_ignore_ascii_case("credit") => "credit",
+        _ => "debit",
+    };
+    let currency = payload
+        .currency
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_uppercase())
+        .unwrap_or_else(|| state.config.default_currency.clone());
+    let base_amount = state
+        .fx
+        .convert_to_base(payload.amount, &currency, &state.config.default_currency)
+        .await;
+    let dedup = compute_dedup_hash(payload.tx_date, vendor, payload.amount, tx_type, "screenshot");
+
+    let mut db_tx = state.db.begin().await?;
+
+    // Check merchant rule first, else requested category, else Uncategorized
+    let norm_vendor = normalize_text(vendor);
+    let rule_cat: Option<Uuid> = sqlx::query_scalar(
+        "SELECT category_id FROM merchant_rules WHERE user_id = $1 AND merchant_pattern = $2",
+    )
+    .bind(auth.user_id)
+    .bind(&norm_vendor)
+    .fetch_optional(&mut *db_tx)
+    .await?;
+
+    let category_id = match rule_cat {
+        Some(cid) => cid,
+        None => resolve_category_id(&mut db_tx, payload.category_name.as_deref()).await?,
+    };
+
+    let record: TransactionRecord = sqlx::query_as(
+        r#"
+        WITH inserted AS (
+            INSERT INTO transactions (
+                user_id, tx_date, vendor, description, category_id,
+                amount, base_amount, tx_type, currency, source, status,
+                is_recurring, is_transfer, tags, dedup_hash
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'screenshot', 'draft', FALSE, FALSE, $10, $11)
+            RETURNING *
+        )
+        SELECT
+            i.id, i.document_id, i.tx_date, i.vendor, i.description,
+            i.category_id, c.name AS category_name,
+            i.wallet_id, w.name AS wallet_name,
+            i.amount, i.base_amount, i.tx_type, i.currency, i.source, i.status,
+            i.is_recurring, i.is_transfer, i.tags, i.created_at
+        FROM inserted i
+        LEFT JOIN categories c ON c.id = i.category_id
+        LEFT JOIN wallets w ON w.id = i.wallet_id
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(payload.tx_date)
+    .bind(vendor)
+    .bind(payload.description.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+    .bind(category_id)
+    .bind(payload.amount)
+    .bind(base_amount)
+    .bind(tx_type)
+    .bind(&currency)
+    .bind(vec!["bank-alert".to_string()])
+    .bind(&dedup)
+    .fetch_one(&mut *db_tx)
+    .await?;
+
+    db_tx.commit().await?;
+    Ok((StatusCode::CREATED, Json(record)))
 }
 
 #[cfg(test)]

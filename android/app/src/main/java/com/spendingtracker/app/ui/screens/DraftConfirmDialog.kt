@@ -437,6 +437,7 @@ fun EditTransactionDialog(
         walletId: String?,
         tags: List<String>
     ) -> Unit,
+    onSplit: () -> Unit = {},
     onDelete: () -> Unit
 ) {
     var vendor by remember(tx.id) { mutableStateOf(tx.vendor) }
@@ -604,7 +605,10 @@ fun EditTransactionDialog(
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 TextButton(onClick = onDelete) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("Del", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onSplit) {
+                    Text("Split")
                 }
                 TextButton(
                     onClick = {

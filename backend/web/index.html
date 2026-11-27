@@ -107,6 +107,10 @@
               <span class="kpi-label">Confirmed</span>
               <span class="kpi-val mono" id="tx-count">0 tx</span>
             </div>
+            <div class="kpi-mini hidden" id="safe-today-wrap">
+              <span class="kpi-label">Safe Today</span>
+              <span class="kpi-val mono text-credit" id="safe-today-val">0 / day</span>
+            </div>
           </div>
         </div>
         <div class="month-stepper" aria-label="Select month">
@@ -130,6 +134,12 @@
 
       <!-- TAB: OVERVIEW -->
       <div data-tab-panel="overview">
+      <!-- Natural-Language Quick Input (#2) -->
+      <form id="nl-form" class="nl-bar">
+        <input id="nl-input" type="text" placeholder="Quick log: e.g. 50k coffee cash #work  or  +15m salary bank" autocomplete="off" />
+        <button class="btn btn-primary btn-sm" type="submit">Log</button>
+      </form>
+
       <!-- Quick-Add Templates Strip -->
       <section class="quick-strip" aria-label="Quick-add templates">
         <span class="muted" style="font-size:0.8rem;font-weight:600;">Quick Add:</span>
@@ -226,6 +236,18 @@
           </div>
         </section>
       </div>
+
+      <!-- Monthly Spending Calendar Heatmap (#4) -->
+      <section class="card" style="margin-top:20px;">
+        <div class="section-head">
+          <h2>Spending Calendar</h2>
+          <span class="muted">Green = no spend · Tap any day to filter ledger</span>
+        </div>
+        <div class="heatmap-weekdays">
+          <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span><span>Sun</span>
+        </div>
+        <div id="calendar-heatmap" class="heatmap-grid"></div>
+      </section>
       </div>
 
       <!-- TAB: PLANNING -->
@@ -508,6 +530,7 @@
           <div style="display:flex;gap:8px;">
             <button id="btn-delete-in-modal" class="btn btn-danger-ghost hidden" type="button">Delete</button>
             <button id="btn-duplicate-in-modal" class="btn btn-ghost btn-sm hidden" type="button">Duplicate</button>
+            <button id="btn-split-in-modal" class="btn btn-ghost btn-sm hidden" type="button">Split</button>
           </div>
           <div style="display:flex;gap:10px;margin-left:auto;">
             <button id="btn-cancel-add" class="btn btn-ghost" type="button">Cancel</button>
@@ -515,6 +538,28 @@
           </div>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- Split Transaction Modal (#5) -->
+  <div id="split-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="split-modal-title">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div>
+          <h3 id="split-modal-title">Split Transaction</h3>
+          <div id="split-meta" class="muted"></div>
+        </div>
+        <button id="btn-close-split" class="btn btn-ghost btn-sm" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div id="split-rows"></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:10px 0;">
+        <button id="btn-add-split-row" class="btn btn-ghost btn-sm" type="button">+ Add Line</button>
+        <span id="split-remaining" class="mono muted" style="font-size:0.84rem;"></span>
+      </div>
+      <div class="modal-footer">
+        <button id="btn-cancel-split" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="btn-confirm-split" class="btn btn-primary" type="button">Apply Split</button>
+      </div>
     </div>
   </div>
 

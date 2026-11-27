@@ -24,10 +24,13 @@ import com.spendingtracker.app.data.MerchantRuleRecord
 import com.spendingtracker.app.data.MonthlySpendingResponse
 import com.spendingtracker.app.data.MonthlyTrendPoint
 import com.spendingtracker.app.data.OfflineQueue
+import com.spendingtracker.app.data.QuickInputParser
 import com.spendingtracker.app.data.QuickTemplateRecord
 import com.spendingtracker.app.data.RangeSpendingResponse
 import com.spendingtracker.app.data.RecurringSummaryResponse
 import com.spendingtracker.app.data.RegisterRequest
+import com.spendingtracker.app.data.SplitItemRequest
+import com.spendingtracker.app.data.SplitTransactionRequest
 import com.spendingtracker.app.data.TagSpending
 import com.spendingtracker.app.data.TokenStore
 import com.spendingtracker.app.data.TransactionRecord
@@ -61,6 +64,7 @@ data class UiState(
     val biometricEnabled: Boolean = false,
     val themeMode: String = "system",
     val privacyMode: Boolean = false,
+    val bankAlertsEnabled: Boolean = false,
     val userEmail: String? = null,
     val isLoading: Boolean = false,
     val isUploading: Boolean = false,
@@ -109,6 +113,7 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
             biometricEnabled = tokenStore.isBiometricEnabled(),
             themeMode = tokenStore.getThemeMode(),
             privacyMode = tokenStore.isPrivacyMode(),
+            bankAlertsEnabled = tokenStore.isBankAlertsEnabled(),
             userEmail = tokenStore.getEmail(),
             offlineQueueCount = offlineQueue.count()
         )
@@ -154,6 +159,54 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
         tokenStore.setPrivacyMode(next)
         _uiState.update {
             it.copy(privacyMode = next, statusMessage = if (next) "Amounts hidden" else "Amounts visible")
+        }
+    }
+
+    fun setBankAlertsEnabled(enabled: Boolean) {
+        tokenStore.setBankAlertsEnabled(enabled)
+        _uiState.update {
+            it.copy(
+                bankAlertsEnabled = enabled,
+                statusMessage = if (enabled) "Bank notification auto-capture ON" else "Bank notification auto-capture OFF"
+            )
+        }
+    }
+
+    fun logNaturalQuickInput(raw: String) {
+        val parsed = QuickInputParser.parse(raw, _uiState.value.wallets)
+        if (parsed == null) {
+            _uiState.update { it.copy(errorMessage = "Try: '50k coffee cash #work' or '+15m salary'") }
+            return
+        }
+        val cur = _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+        createManualTransaction(
+            txDate = java.time.LocalDate.now().toString(),
+            vendor = parsed.vendor,
+            amount = parsed.amount,
+            txType = parsed.txType,
+            currency = cur,
+            categoryName = parsed.categoryName,
+            description = null,
+            isRecurring = false,
+            walletId = parsed.walletId,
+            tags = parsed.tags
+        )
+    }
+
+    fun splitTransaction(id: String, items: List<SplitItemRequest>) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.splitTransaction(id, SplitTransactionRequest(items))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Split into ${items.size} categories") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Split failed") }
+            }
         }
     }
 

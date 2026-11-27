@@ -7,23 +7,29 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.spendingtracker.app.data.SplitItemRequest
+import com.spendingtracker.app.data.TransactionRecord
 import com.spendingtracker.app.data.WalletRecord
+import java.math.BigDecimal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -305,6 +311,85 @@ fun AddRuleDialog(
                 onClick = { onSave(pattern, category) },
                 enabled = pattern.isNotBlank()
             ) { Text("Save Rule") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun SplitTransactionDialog(
+    tx: TransactionRecord,
+    categories: List<String>,
+    onDismiss: () -> Unit,
+    onSplit: (List<SplitItemRequest>) -> Unit
+) {
+    val total = tx.amount.toBigDecimalOrNull() ?: BigDecimal.ZERO
+    val half1 = total.divideToIntegralValue(BigDecimal(2))
+    val half2 = total - half1
+    val rows = remember(tx.id) {
+        mutableStateListOf(
+            (tx.categoryName ?: "Groceries") to half1.toPlainString(),
+            "Uncategorized" to half2.toPlainString()
+        )
+    }
+    val currentSum = rows.fold(BigDecimal.ZERO) { acc, pair ->
+        acc + (pair.second.toBigDecimalOrNull() ?: BigDecimal.ZERO)
+    }
+    val remaining = total - currentSum
+    val isBalanced = remaining.abs() <= BigDecimal("0.01") &&
+        rows.all { (it.second.toBigDecimalOrNull() ?: BigDecimal.ZERO) > BigDecimal.ZERO }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Split ${tx.vendor}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Total: ${tx.amount} ${tx.currency} · Remaining: ${remaining.toPlainString()}")
+                rows.forEachIndexed { idx, (cat, amt) ->
+                    var expanded by remember { mutableStateOf(false) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { expanded = true },
+                            modifier = Modifier.weight(1f)
+                        ) { Text(cat, maxLines = 1) }
+                        DropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            categories.forEach { c ->
+                                DropdownMenuItem(
+                                    text = { Text(c) },
+                                    onClick = {
+                                        rows[idx] = c to amt
+                                        expanded = false
+                                    }
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = amt,
+                            onValueChange = { rows[idx] = cat to it },
+                            label = { Text("Amt") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+                TextButton(onClick = { rows.add("Uncategorized" to "0") }) {
+                    Text("+ Add Split Line")
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSplit(rows.map { SplitItemRequest(categoryName = it.first, amount = it.second.trim()) })
+                },
+                enabled = isBalanced
+            ) { Text("Apply Split") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

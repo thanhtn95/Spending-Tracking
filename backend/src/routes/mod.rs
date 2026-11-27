@@ -67,6 +67,14 @@ pub fn build_router(state: AppState) -> Router {
             get(transactions::list_pending_transactions),
         )
         .route(
+            "/api/v1/transactions/draft",
+            post(extras::create_notification_draft),
+        )
+        .route(
+            "/api/v1/transactions/{id}/split",
+            post(extras::split_transaction),
+        )
+        .route(
             "/api/v1/transactions/{id}",
             axum::routing::patch(transactions::update_transaction)
                 .delete(transactions::delete_transaction),

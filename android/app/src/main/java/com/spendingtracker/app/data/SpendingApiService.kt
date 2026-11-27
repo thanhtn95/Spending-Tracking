@@ -186,4 +186,16 @@ interface SpendingApiService {
 
     @POST("api/v1/backup/import")
     suspend fun importBackup(@Body body: RequestBody): Response<BackupImportResponse>
+
+    // Split Transaction & On-Device Bank Alert Draft
+    @POST("api/v1/transactions/{id}/split")
+    suspend fun splitTransaction(
+        @Path("id") id: String,
+        @Body request: SplitTransactionRequest
+    ): Response<List<TransactionRecord>>
+
+    @POST("api/v1/transactions/draft")
+    suspend fun createNotificationDraft(
+        @Body request: CreateDraftNotificationRequest
+    ): Response<TransactionRecord>
 }

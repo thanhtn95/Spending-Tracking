@@ -118,6 +118,8 @@ fun DashboardScreen(
     onImportBackupClick: () -> Unit,
     onCycleThemeClick: () -> Unit,
     onTogglePrivacy: () -> Unit,
+    onQuickLogSubmit: (String) -> Unit,
+    onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
     onToggleBiometric: () -> Unit,
@@ -129,6 +131,7 @@ fun DashboardScreen(
     val monthFormatter = remember { DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault()) }
 
     var selectedTab by remember { mutableStateOf(0) } // 0=Home, 1=Ledger, 2=Plan, 3=More
+    var quickInputText by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var typeFilter by remember { mutableStateOf("all") } // all | debit | credit
     var categoryFilter by remember { mutableStateOf<String?>(null) }
@@ -156,6 +159,7 @@ fun DashboardScreen(
             val tagOk = tagFilter == null || tx.tags.contains(tagFilter)
             val queryOk = q.isEmpty() ||
                 tx.vendor.lowercase().contains(q) ||
+                tx.txDate.lowercase().contains(q) ||
                 (tx.categoryName ?: "").lowercase().contains(q) ||
                 (tx.walletName ?: "").lowercase().contains(q) ||
                 tx.tags.any { it.lowercase().contains(q.removePrefix("#")) } ||
@@ -540,6 +544,71 @@ fun DashboardScreen(
                                     )
                                 }
                             }
+                            // Safe to Spend Today Pacing Gauge (#3)
+                            val isCurrentMonth = state.selectedMonth == YearMonth.now()
+                            if (isCurrentMonth && state.budgets.isNotEmpty()) {
+                                val totalLimit = state.budgets.fold(BigDecimal.ZERO) { a, b ->
+                                    a + (b.monthlyLimit.toBigDecimalOrNull() ?: BigDecimal.ZERO)
+                                }
+                                val totalBudgetSpent = state.budgets.fold(BigDecimal.ZERO) { a, b ->
+                                    a + (b.spent.toBigDecimalOrNull() ?: BigDecimal.ZERO)
+                                }
+                                val daysLeft = (state.selectedMonth.lengthOfMonth() - LocalDate.now().dayOfMonth + 1).coerceAtLeast(1)
+                                val perDay = (totalLimit - totalBudgetSpent).divideToIntegralValue(BigDecimal(daysLeft))
+                                val ok = perDay >= BigDecimal.ZERO
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Surface(
+                                    color = if (ok) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        text = if (ok) {
+                                            "Safe to spend today: ${maskAmt("${formatAmount(perDay.toPlainString())} $baseCurrency/day")} ($daysLeft d left)"
+                                        } else {
+                                            "Over budget pace by ${maskAmt("${formatAmount(perDay.abs().toPlainString())} $baseCurrency/day")}"
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (ok) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Natural-Language Quick Input (#2, 100% local, 0 AI calls)
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = quickInputText,
+                            onValueChange = { quickInputText = it },
+                            placeholder = { Text("50k coffee cash #work  or  +15m salary", style = MaterialTheme.typography.bodySmall) },
+                            singleLine = true,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        )
+                        Surface(
+                            onClick = {
+                                if (quickInputText.isNotBlank()) {
+                                    onQuickLogSubmit(quickInputText)
+                                    quickInputText = ""
+                                }
+                            },
+                            color = MaterialTheme.colorScheme.primary,
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = "Log",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp)
+                            )
                         }
                     }
                 }
@@ -984,6 +1053,55 @@ fun DashboardScreen(
                     }
                 }
 
+                // Bank Notification Auto-Capture Card (#1) — More tab
+                item {
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(18.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "BANK ALERT AUTO-CAPTURE",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                TextButton(onClick = onToggleBankAlerts) {
+                                    Text(if (state.bankAlertsEnabled) "ON (Tap to disable)" else "Enable")
+                                }
+                            }
+                            Text(
+                                text = "100% on-device regex parser for VCB, TCB, MB, ACB, MoMo, ZaloPay, Timo, Cake notifications. Drops alerts into Pending Drafts with 0 AI calls.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                }
+
+                // Monthly Spending Calendar Heatmap (#4) — Home tab
+                if (selectedTab == 0) {
+                    item {
+                        SpendingCalendarHeatmapCard(
+                            yearMonth = state.selectedMonth,
+                            transactions = state.transactions,
+                            onDayClick = { isoDate ->
+                                searchQuery = isoDate
+                                selectedTab = 1
+                            }
+                        )
+                    }
                 }
 
                 // Category Breakdown Card — Home tab
@@ -1532,4 +1650,103 @@ private fun formatDateHeading(isoDate: String): String {
 private fun formatAmount(raw: String): String {
     val num = raw.toBigDecimalOrNull() ?: return raw
     return NumberFormat.getNumberInstance(Locale.getDefault()).format(num)
+}
+
+@Composable
+private fun SpendingCalendarHeatmapCard(
+    yearMonth: YearMonth,
+    transactions: List<TransactionRecord>,
+    onDayClick: (String) -> Unit
+) {
+    val daysInMonth = yearMonth.lengthOfMonth()
+    val firstDow = (yearMonth.atDay(1).dayOfWeek.value - 1) // Mon=0..Sun=6
+    val dayTotals = remember(yearMonth, transactions) {
+        val map = mutableMapOf<Int, Double>()
+        transactions.forEach { tx ->
+            if (!tx.txType.equals("debit", ignoreCase = true) || tx.isTransfer) return@forEach
+            val day = tx.txDate.takeLast(2).toIntOrNull() ?: return@forEach
+            if (day in 1..daysInMonth) {
+                map[day] = (map[day] ?: 0.0) + ((tx.baseAmount ?: tx.amount).toDoubleOrNull() ?: 0.0)
+            }
+        }
+        map
+    }
+    val maxDay = (dayTotals.values.maxOrNull() ?: 1.0).coerceAtLeast(1.0)
+    val today = LocalDate.now()
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "SPENDING CALENDAR",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "Green = no spend",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("M", "T", "W", "T", "F", "S", "S").forEach { wd ->
+                    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                        Text(wd, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            val totalSlots = firstDow + daysInMonth
+            val rowsCount = (totalSlots + 6) / 7
+            for (r in 0 until rowsCount) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (c in 0 until 7) {
+                        val day = r * 7 + c - firstDow + 1
+                        if (day !in 1..daysInMonth) {
+                            Spacer(modifier = Modifier.weight(1f).height(34.dp))
+                        } else {
+                            val date = yearMonth.atDay(day)
+                            val amt = dayTotals[day] ?: 0.0
+                            val bgColor = when {
+                                amt == 0.0 && !date.isAfter(today) -> MaterialTheme.colorScheme.primaryContainer
+                                amt > 0.0 -> {
+                                    val ratio = amt / maxDay
+                                    when {
+                                        ratio > 0.66 -> Color(0x88EF4444)
+                                        ratio > 0.33 -> Color(0x77F59E0B)
+                                        else -> Color(0x44FBBF24)
+                                    }
+                                }
+                                else -> MaterialTheme.colorScheme.surfaceVariant
+                            }
+                            Surface(
+                                onClick = { onDayClick(date.toString()) },
+                                color = bgColor,
+                                shape = RoundedCornerShape(8.dp),
+                                modifier = Modifier.weight(1f).height(34.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = "$day",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

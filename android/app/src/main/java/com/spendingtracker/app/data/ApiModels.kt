@@ -353,6 +353,26 @@ data class BackupImportResponse(
     @SerializedName("transactions_skipped") val transactionsSkipped: Int
 )
 
+data class SplitItemRequest(
+    @SerializedName("category_name") val categoryName: String,
+    val amount: String,
+    val description: String? = null
+)
+
+data class SplitTransactionRequest(
+    val items: List<SplitItemRequest>
+)
+
+data class CreateDraftNotificationRequest(
+    @SerializedName("tx_date") val txDate: String,
+    val vendor: String,
+    val description: String? = null,
+    @SerializedName("category_name") val categoryName: String? = null,
+    val amount: String,
+    @SerializedName("tx_type") val txType: String = "debit",
+    val currency: String = "VND"
+)
+
 // --- Error ---
 
 data class ApiErrorEnvelope(

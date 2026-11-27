@@ -581,3 +581,28 @@ pub struct BackupImportResponse {
     pub transactions_added: usize,
     pub transactions_skipped: usize,
 }
+
+// --- Split Transaction & On-Device Bank Alert Draft ---
+
+#[derive(Debug, Deserialize)]
+pub struct SplitItemRequest {
+    pub category_name: String,
+    pub amount: Decimal,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SplitTransactionRequest {
+    pub items: Vec<SplitItemRequest>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateDraftNotificationRequest {
+    pub tx_date: NaiveDate,
+    pub vendor: String,
+    pub description: Option<String>,
+    pub category_name: Option<String>,
+    pub amount: Decimal,
+    pub tx_type: Option<String>,
+    pub currency: Option<String>,
+}

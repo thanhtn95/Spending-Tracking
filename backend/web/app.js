@@ -202,6 +202,21 @@
   const btnCancelAdd = document.getElementById("btn-cancel-add");
   const btnDeleteInModal = document.getElementById("btn-delete-in-modal");
   const btnDuplicateInModal = document.getElementById("btn-duplicate-in-modal");
+  const btnSplitInModal = document.getElementById("btn-split-in-modal");
+  const safeTodayWrap = document.getElementById("safe-today-wrap");
+  const safeTodayVal = document.getElementById("safe-today-val");
+  const nlForm = document.getElementById("nl-form");
+  const nlInput = document.getElementById("nl-input");
+  const calendarHeatmapEl = document.getElementById("calendar-heatmap");
+  const splitModal = document.getElementById("split-modal");
+  const splitMetaEl = document.getElementById("split-meta");
+  const splitRowsEl = document.getElementById("split-rows");
+  const splitRemainingEl = document.getElementById("split-remaining");
+  const btnAddSplitRow = document.getElementById("btn-add-split-row");
+  const btnCloseSplit = document.getElementById("btn-close-split");
+  const btnCancelSplit = document.getElementById("btn-cancel-split");
+  const btnConfirmSplit = document.getElementById("btn-confirm-split");
+  let splittingTx = null;
   const addForm = document.getElementById("add-form");
   const addTypeEl = document.getElementById("add-type");
   const addDateEl = document.getElementById("add-date");
@@ -516,8 +531,10 @@
       syncTagFilter(state.tags);
       state.transactions = txs || [];
       renderTransactions();
+      renderCalendarHeatmap(state.transactions);
       renderTrend(trend || []);
       renderBudgets(budgets || []);
+      renderSafeToSpend(budgets || []);
       renderRecurring(recurring);
       renderGoals(goals || []);
       renderIous(ious || []);
@@ -532,6 +549,239 @@
     } catch (err) {
       if (err.message !== "Unauthorized") showToast(err.message);
     }
+  }
+
+  // --- Safe to Spend Today Pacing (#3) ---
+  function renderSafeToSpend(budgets) {
+    if (!safeTodayWrap || !safeTodayVal) return;
+    const isCurrentMonth = state.year === now.getFullYear() && state.month === (now.getMonth() + 1);
+    if (!budgets.length || !isCurrentMonth) {
+      safeTodayWrap.classList.add("hidden");
+      return;
+    }
+    const totalLimit = budgets.reduce((a, b) => a + Number(b.monthly_limit || 0), 0);
+    const totalSpent = budgets.reduce((a, b) => a + Number(b.spent || 0), 0);
+    const daysInMonth = new Date(state.year, state.month, 0).getDate();
+    const daysLeft = Math.max(1, daysInMonth - now.getDate() + 1);
+    const perDay = Math.round((totalLimit - totalSpent) / daysLeft);
+    safeTodayWrap.classList.remove("hidden");
+    safeTodayVal.textContent = perDay >= 0
+      ? `${formatNumber(perDay)} / day`
+      : `Over ${formatNumber(Math.abs(perDay))}/d`;
+    safeTodayVal.className = `kpi-val mono ${perDay >= 0 ? "text-credit" : "text-debt"}`;
+  }
+
+  // --- Monthly Spending Calendar Heatmap (#4) ---
+  function renderCalendarHeatmap(txs) {
+    if (!calendarHeatmapEl) return;
+    const daysInMonth = new Date(state.year, state.month, 0).getDate();
+    const firstDow = (new Date(state.year, state.month - 1, 1).getDay() + 6) % 7; // Mon=0..Sun=6
+    const dayTotals = {};
+    for (const t of txs) {
+      if ((t.tx_type || "debit") !== "debit" || t.is_transfer) continue;
+      const d = Number((t.tx_date || "").slice(8, 10));
+      if (d >= 1 && d <= daysInMonth) {
+        dayTotals[d] = (dayTotals[d] || 0) + Number(t.base_amount ?? t.amount ?? 0);
+      }
+    }
+    const maxDay = Math.max(1, ...Object.values(dayTotals));
+    const cells = [];
+    for (let i = 0; i < firstDow; i++) {
+      cells.push(`<div class="hm-cell hm-empty"></div>`);
+    }
+    const today = new Date();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const iso = `${state.year}-${String(state.month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+      const amt = dayTotals[d] || 0;
+      const isFuture = new Date(state.year, state.month - 1, d) > today;
+      let cls = "";
+      if (amt === 0 && !isFuture) cls = "hm-zero";
+      else if (amt > 0) {
+        const ratio = amt / maxDay;
+        cls = ratio > 0.66 ? "hm-l3" : (ratio > 0.33 ? "hm-l2" : "hm-l1");
+      }
+      const compact = amt >= 1000000 ? `${(amt / 1000000).toFixed(1)}m` : (amt >= 1000 ? `${Math.round(amt / 1000)}k` : (amt > 0 ? String(Math.round(amt)) : ""));
+      cells.push(`
+        <button class="hm-cell ${cls}" type="button" data-hm-date="${iso}" title="${iso}: ${formatNumber(amt)} ${state.baseCurrency}">
+          <span>${d}</span>
+          ${compact ? `<span class="hm-amt mono">${compact}</span>` : ""}
+        </button>`);
+    }
+    calendarHeatmapEl.innerHTML = cells.join("");
+  }
+
+  if (calendarHeatmapEl) {
+    calendarHeatmapEl.addEventListener("click", (e) => {
+      const cell = e.target.closest("[data-hm-date]");
+      if (!cell) return;
+      const iso = cell.dataset.hmDate;
+      txSearch.value = iso;
+      renderTransactions();
+      activateWebTab("ledger");
+    });
+  }
+
+  // --- Natural-Language Quick Input (#2, 100% local, 0 AI calls) ---
+  function parseNaturalQuickInput(raw) {
+    const tokens = raw.trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) return null;
+    let txType = "debit";
+    let amount = null;
+    const tags = [];
+    let walletId = null;
+    const words = [];
+
+    for (const tok of tokens) {
+      if (tok.startsWith("#") && tok.length > 1) {
+        tags.push(tok.slice(1).toLowerCase());
+        continue;
+      }
+      const amtMatch = tok.match(/^([+-])?(\d+(?:[.,]\d+)?)(k|m|tr)?$/i);
+      if (amtMatch && amount === null) {
+        if (amtMatch[1] === "+") txType = "credit";
+        let num = Number(amtMatch[2].replace(",", "."));
+        const unit = (amtMatch[3] || "").toLowerCase();
+        if (unit === "k") num *= 1000;
+        else if (unit === "m" || unit === "tr") num *= 1000000;
+        if (num > 0) {
+          amount = num;
+          continue;
+        }
+      }
+      const matchedWallet = state.wallets.find((w) => w.name.toLowerCase() === tok.toLowerCase());
+      if (matchedWallet && !walletId) {
+        walletId = matchedWallet.id;
+        continue;
+      }
+      words.push(tok);
+    }
+    if (!amount || !words.length) return null;
+    const vendor = words.join(" ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const lower = vendor.toLowerCase();
+    let category = "Uncategorized";
+    if (txType === "credit" && /salary|lương|bonus|payroll/.test(lower)) category = "Salary";
+    else if (txType === "credit") category = "Income";
+    else if (/coffee|cafe|cà phê|lunch|dinner|breakfast|pho|phở|food|eat|tea|trà/.test(lower)) category = "Dining";
+    else if (/grab|taxi|uber|gas|xăng|parking|bus|metro|train/.test(lower)) category = "Transport";
+    else if (/mart|grocery|supermarket|siêu thị|market|coop|winmart|bhx/.test(lower)) category = "Groceries";
+    else if (/electric|water|internet|wifi|phone|bill|điện|nước/.test(lower)) category = "Utilities";
+    else if (/netflix|spotify|icloud|youtube|gym/.test(lower)) category = "Subscriptions";
+    return { amount: String(amount), vendor, txType, category, walletId, tags };
+  }
+
+  if (nlForm && nlInput) {
+    nlForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const parsed = parseNaturalQuickInput(nlInput.value);
+      if (!parsed) {
+        showToast("Format: e.g. '50k coffee cash #work' or '+15m salary bank'");
+        return;
+      }
+      try {
+        await apiFetch("/api/v1/transactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tx_date: new Date().toISOString().slice(0, 10),
+            vendor: parsed.vendor,
+            category_name: parsed.category,
+            wallet_id: parsed.walletId,
+            amount: parsed.amount,
+            currency: state.baseCurrency || "VND",
+            tx_type: parsed.txType,
+            tags: parsed.tags,
+          }),
+        });
+        nlInput.value = "";
+        showToast(`Logged ${parsed.vendor} (${parsed.txType === "credit" ? "+" : "-"}${formatNumber(parsed.amount)} ${state.baseCurrency})`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+
+  // --- Split Transaction Modal (#5) ---
+  function renderSplitRemaining() {
+    if (!splittingTx || !splitRemainingEl) return;
+    const orig = Number(splittingTx.amount || 0);
+    const sum = Array.from(splitRowsEl.querySelectorAll(".split-amt"))
+      .reduce((acc, el) => acc + (Number(el.value) || 0), 0);
+    const rem = Math.round((orig - sum) * 100) / 100;
+    splitRemainingEl.textContent = rem === 0 ? "Balanced ✓" : `Remaining: ${formatNumber(rem)}`;
+    btnConfirmSplit.disabled = Math.abs(rem) > 0.01;
+  }
+
+  function addSplitRow(cat = "Uncategorized", amt = "") {
+    const opts = CATEGORIES.map((c) => `<option value="${escapeHtml(c)}" ${c === cat ? "selected" : ""}>${escapeHtml(c)}</option>`).join("");
+    const row = document.createElement("div");
+    row.className = "split-row";
+    row.innerHTML = `
+      <select class="split-cat">${opts}</select>
+      <input class="split-amt mono" type="number" step="0.01" min="0.01" value="${escapeHtml(amt)}" placeholder="Amount" />
+      <button class="btn-del" type="button" title="Remove">&times;</button>`;
+    row.querySelector(".split-amt").addEventListener("input", renderSplitRemaining);
+    row.querySelector(".btn-del").addEventListener("click", () => {
+      if (splitRowsEl.children.length > 2) {
+        row.remove();
+        renderSplitRemaining();
+      }
+    });
+    splitRowsEl.appendChild(row);
+    renderSplitRemaining();
+  }
+
+  function openSplitModal(tx) {
+    splittingTx = tx;
+    const total = Number(tx.amount || 0);
+    const half1 = Math.floor(total / 2);
+    const half2 = total - half1;
+    splitMetaEl.textContent = `${tx.vendor} · Total: ${formatNumber(total)} ${tx.currency}`;
+    splitRowsEl.innerHTML = "";
+    addSplitRow(tx.category_name || "Groceries", String(half1));
+    addSplitRow("Uncategorized", String(half2));
+    splitModal.classList.remove("hidden");
+  }
+
+  function closeSplitModal() {
+    splitModal.classList.add("hidden");
+    splittingTx = null;
+  }
+
+  if (btnAddSplitRow) btnAddSplitRow.addEventListener("click", () => addSplitRow("Uncategorized", ""));
+  if (btnCloseSplit) btnCloseSplit.addEventListener("click", closeSplitModal);
+  if (btnCancelSplit) btnCancelSplit.addEventListener("click", closeSplitModal);
+  if (btnSplitInModal) {
+    btnSplitInModal.addEventListener("click", () => {
+      const tx = state.transactions.find((t) => t.id === editTxIdEl.value);
+      if (!tx) return;
+      closeAddModal();
+      openSplitModal(tx);
+    });
+  }
+  if (btnConfirmSplit) {
+    btnConfirmSplit.addEventListener("click", async () => {
+      if (!splittingTx) return;
+      const items = Array.from(splitRowsEl.querySelectorAll(".split-row")).map((row) => ({
+        category_name: row.querySelector(".split-cat").value,
+        amount: row.querySelector(".split-amt").value,
+      }));
+      btnConfirmSplit.disabled = true;
+      try {
+        await apiFetch(`/api/v1/transactions/${encodeURIComponent(splittingTx.id)}/split`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items }),
+        });
+        closeSplitModal();
+        showToast(`Split into ${items.length} categories.`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btnConfirmSplit.disabled = false;
+      }
+    });
   }
 
   // --- Quick-Add Templates (#1) ---
@@ -1195,6 +1445,7 @@
       if (tagFilter !== "all" && !(t.tags || []).includes(tagFilter)) return false;
       if (!query) return true;
       return (t.vendor || "").toLowerCase().includes(query) ||
+        (t.tx_date || "").toLowerCase().includes(query) ||
         (t.category_name || "").toLowerCase().includes(query) ||
         (t.wallet_name || "").toLowerCase().includes(query) ||
         (t.tags || []).some((tg) => tg.toLowerCase().includes(query.replace(/^#/, ""))) ||
@@ -1352,6 +1603,7 @@
     btnSubmitAdd.textContent = "Save Transaction";
     btnDeleteInModal.classList.add("hidden");
     if (btnDuplicateInModal) btnDuplicateInModal.classList.add("hidden");
+    if (btnSplitInModal) btnSplitInModal.classList.add("hidden");
     addTypeEl.value = "debit";
     addDateEl.value = new Date().toISOString().slice(0, 10);
     addVendorEl.value = "";
@@ -1371,6 +1623,7 @@
     btnSubmitAdd.textContent = "Save Changes";
     btnDeleteInModal.classList.remove("hidden");
     if (btnDuplicateInModal) btnDuplicateInModal.classList.remove("hidden");
+    if (btnSplitInModal) btnSplitInModal.classList.remove("hidden");
     addTypeEl.value = (tx.tx_type || "debit") === "credit" ? "credit" : "debit";
     addDateEl.value = tx.tx_date || new Date().toISOString().slice(0, 10);
     addVendorEl.value = tx.vendor || "";

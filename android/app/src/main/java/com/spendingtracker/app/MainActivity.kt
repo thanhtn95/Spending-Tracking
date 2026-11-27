@@ -59,6 +59,7 @@ import com.spendingtracker.app.ui.screens.AddWalletDialog
 import com.spendingtracker.app.ui.screens.NewCategoryDialog
 import com.spendingtracker.app.ui.screens.PdfPasswordDialog
 import com.spendingtracker.app.ui.screens.SetBudgetDialog
+import com.spendingtracker.app.ui.screens.SplitTransactionDialog
 import com.spendingtracker.app.ui.screens.TransferWalletDialog
 import com.spendingtracker.app.ui.theme.SpendingTrackerTheme
 
@@ -194,6 +195,7 @@ class MainActivity : FragmentActivity() {
                     }
                 } else {
                     var editingTx by remember { mutableStateOf<TransactionRecord?>(null) }
+                    var splittingTx by remember { mutableStateOf<TransactionRecord?>(null) }
                     var showAddDialog by remember { mutableStateOf(false) }
                     var showBudgetDialog by remember { mutableStateOf(false) }
                     var showCategoryDialog by remember { mutableStateOf(false) }
@@ -261,6 +263,16 @@ class MainActivity : FragmentActivity() {
                         },
                         onCycleThemeClick = { viewModel.cycleThemeMode() },
                         onTogglePrivacy = { viewModel.togglePrivacyMode() },
+                        onQuickLogSubmit = { raw -> viewModel.logNaturalQuickInput(raw) },
+                        onToggleBankAlerts = {
+                            val enabling = !state.bankAlertsEnabled
+                            viewModel.setBankAlertsEnabled(enabling)
+                            if (enabling) {
+                                runCatching {
+                                    startActivity(Intent(android.provider.Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                                }
+                            }
+                        },
                         onReviewPendingClick = { viewModel.openPendingDrafts() },
                         onFlushOfflineClick = { viewModel.flushOfflineQueue() },
                         onToggleBiometric = {
@@ -440,9 +452,25 @@ class MainActivity : FragmentActivity() {
                                 )
                                 editingTx = null
                             },
+                            onSplit = {
+                                splittingTx = tx
+                                editingTx = null
+                            },
                             onDelete = {
                                 viewModel.deleteTransaction(tx.id)
                                 editingTx = null
+                            }
+                        )
+                    }
+
+                    splittingTx?.let { tx ->
+                        SplitTransactionDialog(
+                            tx = tx,
+                            categories = state.categories,
+                            onDismiss = { splittingTx = null },
+                            onSplit = { items ->
+                                viewModel.splitTransaction(tx.id, items)
+                                splittingTx = null
                             }
                         )
                     }

@@ -52,6 +52,12 @@ class TokenStore(context: Context) {
         prefs.edit().putBoolean(KEY_PRIVACY, enabled).apply()
     }
 
+    fun isBankAlertsEnabled(): Boolean = prefs.getBoolean(KEY_BANK_ALERTS, false)
+
+    fun setBankAlertsEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BANK_ALERTS, enabled).apply()
+    }
+
     /** Cached snapshot for the Android Home Screen Widget (zero extra API calls) */
     fun saveWidgetSnapshot(balance: String, monthSpent: String, currency: String) {
         prefs.edit()
@@ -76,6 +82,7 @@ class TokenStore(context: Context) {
         private const val KEY_BIOMETRIC = "biometric_lock_enabled"
         private const val KEY_THEME = "theme_mode"
         private const val KEY_PRIVACY = "privacy_mode"
+        private const val KEY_BANK_ALERTS = "bank_alerts_enabled"
         private const val KEY_WIDGET_BAL = "widget_balance"
         private const val KEY_WIDGET_SPENT = "widget_month_spent"
         private const val KEY_WIDGET_CUR = "widget_currency"

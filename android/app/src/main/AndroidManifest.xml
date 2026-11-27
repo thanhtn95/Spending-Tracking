@@ -62,5 +62,16 @@
                 android:resource="@xml/spending_widget_info" />
         </receiver>
 
+        <!-- Opt-in On-Device Bank Notification Auto-Capture ($0/month, 0 AI calls) -->
+        <service
+            android:name=".data.BankNotificationListener"
+            android:exported="true"
+            android:label="Spending Tracker Bank Alerts"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>

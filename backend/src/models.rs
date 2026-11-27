@@ -707,3 +707,49 @@ pub struct ForecastAndHealthResponse {
     pub net_worth_points: Vec<NetWorthPoint>,
     pub alerts: Vec<SpendingAlertItem>,
 }
+
+// --- Global Search, Day-of-Week Breakdown & FX Rates ---
+
+#[derive(Debug, Deserialize)]
+pub struct GlobalSearchQuery {
+    pub q: Option<String>,
+    pub min_amount: Option<Decimal>,
+    pub max_amount: Option<Decimal>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GlobalSearchResponse {
+    pub query: String,
+    pub base_currency: String,
+    pub total_spent: Decimal,
+    pub total_credit: Decimal,
+    pub count: usize,
+    pub transactions: Vec<TransactionRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WeekdayQuery {
+    pub months: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WeekdaySpendingItem {
+    pub dow: i32, // 1=Mon .. 7=Sun
+    pub label: String,
+    pub total_spent: Decimal,
+    pub tx_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WeekdayBreakdownResponse {
+    pub months: u32,
+    pub base_currency: String,
+    pub busiest_day: Option<String>,
+    pub days: Vec<WeekdaySpendingItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FxRatesResponse {
+    pub base_currency: String,
+    pub rates_vs_usd: std::collections::HashMap<String, Decimal>,
+}

@@ -140,6 +140,8 @@ fun DashboardScreen(
     onDebtCalcClick: () -> Unit,
     onSwipeDeleteTx: (TransactionRecord) -> Unit,
     onUndoDeleteTx: (TransactionRecord) -> Unit,
+    onGlobalSearchClick: (String, String?) -> Unit,
+    onClearGlobalSearchClick: () -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -159,6 +161,7 @@ fun DashboardScreen(
     var selectedIds by remember { mutableStateOf(setOf<String>()) }
     var bulkCatMenuExpanded by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var minAmountFilter by remember { mutableStateOf<Double?>(null) }
     var typeFilter by remember { mutableStateOf("all") } // all | debit | credit
     var categoryFilter by remember { mutableStateOf<String?>(null) }
     var tagFilter by remember { mutableStateOf<String?>(null) }
@@ -177,12 +180,14 @@ fun DashboardScreen(
     val activeCategories = remember(state.transactions) {
         state.transactions.map { it.categoryName ?: "Uncategorized" }.distinct().sorted()
     }
-    val filteredTxs = remember(state.transactions, searchQuery, typeFilter, categoryFilter, tagFilter) {
+    val filteredTxs = remember(state.transactions, searchQuery, typeFilter, categoryFilter, tagFilter, minAmountFilter) {
         val q = searchQuery.trim().lowercase()
         state.transactions.filter { tx ->
             val typeOk = typeFilter == "all" || tx.txType.equals(typeFilter, ignoreCase = true)
             val catOk = categoryFilter == null || (tx.categoryName ?: "Uncategorized") == categoryFilter
             val tagOk = tagFilter == null || tx.tags.contains(tagFilter)
+            val amtNum = (tx.baseAmount ?: tx.amount).toDoubleOrNull() ?: 0.0
+            val minOk = minAmountFilter == null || amtNum >= minAmountFilter!!
             val queryOk = q.isEmpty() ||
                 tx.vendor.lowercase().contains(q) ||
                 tx.txDate.lowercase().contains(q) ||
@@ -190,7 +195,7 @@ fun DashboardScreen(
                 (tx.walletName ?: "").lowercase().contains(q) ||
                 tx.tags.any { it.lowercase().contains(q.removePrefix("#")) } ||
                 (tx.description ?: "").lowercase().contains(q)
-            typeOk && catOk && tagOk && queryOk
+            typeOk && catOk && tagOk && minOk && queryOk
         }
     }
     val groupedByDate = remember(filteredTxs) {
@@ -721,6 +726,14 @@ fun DashboardScreen(
                             forecast = f,
                             privacyMode = state.privacyMode
                         )
+                    }
+                }
+                // Day-of-Week Spending Breakdown (#2)
+                state.weekdayBreakdown?.let { wd ->
+                    if (wd.days.any { (it.totalSpent.toDoubleOrNull() ?: 0.0) > 0.0 }) {
+                        item {
+                            WeekdaySpendingCard(weekday = wd, privacyMode = state.privacyMode)
+                        }
                     }
                 }
                 // Monthly Highlights: Savings Rate, No-Spend Streak, MoM & Top Merchants (#2 & #3)
@@ -1292,6 +1305,13 @@ fun DashboardScreen(
                     }
                 }
 
+                // Quick Currency Converter (#3) — More tab
+                state.fxRates?.let { fx ->
+                    if (fx.ratesVsUsd.isNotEmpty()) {
+                        item { CurrencyConverterCard(fx = fx) }
+                    }
+                }
+
                 }
 
                 // Monthly Spending Calendar Heatmap (#4) — Home tab
@@ -1418,21 +1438,73 @@ fun DashboardScreen(
                                 }
                             }
                         }
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            placeholder = { Text("Search merchant or category...") },
-                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf("all" to "All", "debit" to "Debits", "credit" to "Credits").forEach { (key, label) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                placeholder = { Text("Search merchant, #tag...") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(
+                                onClick = {
+                                    onGlobalSearchClick(searchQuery, minAmountFilter?.toLong()?.toString())
+                                }
+                            ) {
+                                Text("All-Time")
+                            }
+                        }
+                        state.globalSearch?.let { gs ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = RoundedCornerShape(10.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "All-Time (${gs.count}): -${maskAmt(formatAmount(gs.totalSpent))} ${gs.baseCurrency}",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(onClick = {
+                                        searchQuery = ""
+                                        minAmountFilter = null
+                                        onClearGlobalSearchClick()
+                                    }) { Text("Reset") }
+                                }
+                            }
+                        }
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(listOf("all" to "All", "debit" to "Debits", "credit" to "Credits")) { (key, label) ->
                                 FilterChip(
                                     selected = typeFilter == key,
                                     onClick = { typeFilter = key },
                                     label = { Text(label) }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = minAmountFilter == 500_000.0,
+                                    onClick = { minAmountFilter = if (minAmountFilter == 500_000.0) null else 500_000.0 },
+                                    label = { Text("≥ 500k") }
+                                )
+                            }
+                            item {
+                                FilterChip(
+                                    selected = minAmountFilter == 1_000_000.0,
+                                    onClick = { minAmountFilter = if (minAmountFilter == 1_000_000.0) null else 1_000_000.0 },
+                                    label = { Text("≥ 1M") }
                                 )
                             }
                         }
@@ -2139,6 +2211,122 @@ private fun PreferencesCard(
                 }
             ) {
                 Text("Save Payday & Travel Settings")
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeekdaySpendingCard(
+    weekday: com.spendingtracker.app.data.WeekdayBreakdownResponse,
+    privacyMode: Boolean
+) {
+    val maxV = weekday.days.maxOfOrNull { it.totalSpent.toFloatOrNull() ?: 0f }?.coerceAtLeast(1f) ?: 1f
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(
+                    text = "DAY-OF-WEEK SPENDING (${weekday.months}M)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                weekday.busiestDay?.let {
+                    Text("Peak: $it", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().height(90.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.Bottom
+            ) {
+                weekday.days.forEach { d ->
+                    val amt = d.totalSpent.toFloatOrNull() ?: 0f
+                    val h = ((amt / maxV) * 62f).coerceAtLeast(4f).dp
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Box(
+                            modifier = Modifier
+                                .width(18.dp)
+                                .height(h)
+                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                .background(
+                                    if (d.label == weekday.busiestDay) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.primary
+                                )
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(d.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CurrencyConverterCard(fx: com.spendingtracker.app.data.FxRatesResponse) {
+    var amt by remember { mutableStateOf("100") }
+    var fromCur by remember { mutableStateOf("USD") }
+    var toCur by remember { mutableStateOf(fx.baseCurrency) }
+    val currencies = listOf("USD", "VND", "EUR", "JPY", "THB", "SGD", "GBP", "KRW")
+    val result = remember(amt, fromCur, toCur, fx.ratesVsUsd) {
+        val v = amt.toDoubleOrNull() ?: return@remember "—"
+        val rf = fx.ratesVsUsd[fromCur]?.toDoubleOrNull() ?: return@remember "—"
+        val rt = fx.ratesVsUsd[toCur]?.toDoubleOrNull() ?: return@remember "—"
+        if (rf <= 0.0) return@remember "—"
+        val out = (v / rf) * rt
+        val fmt = NumberFormat.getNumberInstance(Locale.getDefault()).apply {
+            maximumFractionDigits = if (toCur in listOf("VND", "JPY", "KRW")) 0 else 2
+        }.format(out)
+        "= $fmt $toCur"
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "CURRENCY CONVERTER (CACHED FX)",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = amt,
+                onValueChange = { amt = it },
+                label = { Text("Amount") },
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(currencies) { code ->
+                    FilterChip(
+                        selected = fromCur == code,
+                        onClick = { fromCur = code },
+                        label = { Text(code) }
+                    )
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "$amt $fromCur $result",
+                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                TextButton(onClick = { val tmp = fromCur; fromCur = toCur; toCur = tmp }) {
+                    Text("Swap")
+                }
             }
         }
     }

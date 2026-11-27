@@ -286,8 +286,10 @@
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <span id="savings-rate-badge" class="badge-subtle mono">Savings: —</span>
             <span id="nospend-streak-badge" class="badge-subtle mono">No-spend: 0d</span>
+            <span id="weekday-busiest" class="badge-subtle">Peak day: —</span>
           </div>
         </div>
+        <div id="weekday-chart" class="trend-chart" style="margin-bottom:14px;height:110px;"></div>
         <div class="mom-grid">
           <div>
             <div class="muted" style="font-size:0.78rem;font-weight:600;margin-bottom:8px;">BIGGEST CATEGORY CHANGES (MoM)</div>
@@ -377,12 +379,13 @@
             <div class="empty-block">No goals yet. Add a savings or debt payoff target below.</div>
           </div>
           <form id="goal-form" class="inline-form-4">
-            <input id="goal-name" type="text" required placeholder="e.g. Pay off card" />
+            <input id="goal-name" type="text" required placeholder="e.g. Car Insurance / Tet" />
             <select id="goal-type">
+              <option value="savings">Sinking Fund / Savings</option>
               <option value="debt_payoff">Debt Payoff</option>
-              <option value="savings">Savings</option>
             </select>
             <input id="goal-target" class="mono" type="number" min="1" required placeholder="Target" />
+            <input id="goal-date" class="mono" type="date" title="Optional target due date for monthly sinking fund plan" />
             <button class="btn btn-ghost btn-sm" type="submit">Add</button>
           </form>
           <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
@@ -484,6 +487,28 @@
         </section>
       </div>
 
+      <!-- Quick Currency Converter (#3) -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Currency Converter</h2>
+          <span class="badge-subtle">Cached Live FX ($0)</span>
+        </div>
+        <div class="inline-form-4">
+          <input id="fx-amount" class="mono" type="number" step="0.01" value="100" placeholder="Amount" />
+          <select id="fx-from">
+            <option value="USD">USD</option><option value="VND">VND</option><option value="EUR">EUR</option>
+            <option value="JPY">JPY</option><option value="THB">THB</option><option value="SGD">SGD</option>
+            <option value="GBP">GBP</option><option value="KRW">KRW</option>
+          </select>
+          <select id="fx-to">
+            <option value="VND">VND</option><option value="USD">USD</option><option value="EUR">EUR</option>
+            <option value="JPY">JPY</option><option value="THB">THB</option><option value="SGD">SGD</option>
+            <option value="GBP">GBP</option><option value="KRW">KRW</option>
+          </select>
+          <div id="fx-result" class="mono" style="font-weight:600;align-self:center;">—</div>
+        </div>
+      </section>
+
       <!-- Account Security: Change Password (#3) -->
       <section class="card" style="margin-top:20px;">
         <div class="section-head">
@@ -514,6 +539,8 @@
           </div>
           <div class="table-filters">
             <input id="tx-search" class="search-input" type="search" placeholder="Filter vendor, category, #tag..." />
+            <input id="tx-min-amount" class="mono" type="number" min="0" step="10000" placeholder="Min amt" style="width:105px;" />
+            <button id="btn-global-search" class="btn btn-ghost btn-sm" type="button" title="Search across all months and years">All-Time</button>
             <select id="tx-category-filter" aria-label="Filter by category">
               <option value="all">All Categories</option>
             </select>
@@ -535,6 +562,10 @@
         </div>
 
         <!-- Custom Date Range / YTD Strip -->
+        <div id="global-search-banner" class="bulk-bar hidden">
+          <span id="global-search-text" class="mono" style="font-size:0.84rem;"></span>
+          <button id="btn-clear-global-search" class="btn btn-ghost btn-sm" type="button" style="margin-left:auto;">Back to Month</button>
+        </div>
         <div id="range-bar" class="range-bar hidden">
           <input id="range-start" class="mono" type="date" aria-label="Start date" />
           <span class="muted">to</span>

@@ -322,6 +322,8 @@ class MainActivity : FragmentActivity() {
                         onDebtCalcClick = { showDebtCalcDialog = true },
                         onSwipeDeleteTx = { tx -> viewModel.deleteTransaction(tx.id) },
                         onUndoDeleteTx = { tx -> viewModel.restoreDeletedTransaction(tx) },
+                        onGlobalSearchClick = { q, minA -> viewModel.runGlobalSearch(q, minA) },
+                        onClearGlobalSearchClick = { viewModel.clearGlobalSearch() },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

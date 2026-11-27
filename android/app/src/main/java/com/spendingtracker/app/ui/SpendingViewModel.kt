@@ -20,6 +20,8 @@ import com.spendingtracker.app.data.CreateWalletRequest
 import com.spendingtracker.app.data.DashboardCache
 import com.spendingtracker.app.data.DraftTransactionPreview
 import com.spendingtracker.app.data.ForecastAndHealthResponse
+import com.spendingtracker.app.data.FxRatesResponse
+import com.spendingtracker.app.data.GlobalSearchResponse
 import com.spendingtracker.app.data.GoalRecord
 import com.spendingtracker.app.data.IngestResponse
 import com.spendingtracker.app.data.IouRecord
@@ -49,6 +51,7 @@ import com.spendingtracker.app.data.UpsertBudgetRequest
 import com.spendingtracker.app.data.UpsertMerchantRuleRequest
 import com.spendingtracker.app.data.UserPreferencesResponse
 import com.spendingtracker.app.data.WalletRecord
+import com.spendingtracker.app.data.WeekdayBreakdownResponse
 import com.spendingtracker.app.data.ZeroBalanceRequest
 import com.spendingtracker.app.widget.SpendingWidgetProvider
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +88,9 @@ data class UiState(
     val comparison: MonthlyComparisonResponse? = null,
     val forecast: ForecastAndHealthResponse? = null,
     val preferences: UserPreferencesResponse? = null,
+    val weekdayBreakdown: WeekdayBreakdownResponse? = null,
+    val fxRates: FxRatesResponse? = null,
+    val globalSearch: GlobalSearchResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -461,6 +467,8 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 val compRes = api.getMonthlyComparison(ym.year, ym.monthValue)
                 val forecastRes = api.getForecast(ym.year, ym.monthValue)
                 val prefsRes = api.getPreferences()
+                val weekdayRes = api.getWeekdayBreakdown(3)
+                val fxRes = api.getFxRates()
 
                 if (summaryRes.code() == 401 || txRes.code() == 401) {
                     logout()
@@ -485,6 +493,9 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                             comparison = if (compRes.isSuccessful) compRes.body() else it.comparison,
                             forecast = if (forecastRes.isSuccessful) forecastRes.body() else it.forecast,
                             preferences = if (prefsRes.isSuccessful) prefsRes.body() else it.preferences,
+                            weekdayBreakdown = if (weekdayRes.isSuccessful) weekdayRes.body() else it.weekdayBreakdown,
+                            fxRates = if (fxRes.isSuccessful) fxRes.body() else it.fxRates,
+                            globalSearch = null,
                             rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
                             transactions = txRes.body().orEmpty(),
                             wallets = if (walletsRes.isSuccessful) walletsRes.body().orEmpty() else it.wallets,
@@ -1110,6 +1121,37 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
 
     fun clearDateRange() {
         _uiState.update { it.copy(rangeStart = null, rangeEnd = null, rangeSummary = null) }
+        refreshDashboard()
+    }
+
+    fun runGlobalSearch(query: String, minAmount: String? = null) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.searchAllTransactions(
+                    query = query.trim().takeIf { it.isNotEmpty() },
+                    minAmount = minAmount?.trim()?.takeIf { it.isNotEmpty() }
+                )
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            globalSearch = body,
+                            transactions = body.transactions
+                        )
+                    }
+                } else {
+                    _uiState.update { it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Search failed") }
+            }
+        }
+    }
+
+    fun clearGlobalSearch() {
+        _uiState.update { it.copy(globalSearch = null) }
         refreshDashboard()
     }
 

@@ -5,11 +5,13 @@ use crate::{
         BackupTemplate, BackupTransaction, BackupWallet, BulkTransactionsRequest,
         BulkTransactionsResponse, CategoryMomChange, CategorySpending,
         CreateDraftNotificationRequest, CreateTemplateRequest, CreateWalletRequest,
-        ForecastAndHealthResponse, MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery,
-        NetWorthPoint, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
-        SpendingAlertItem, SplitTransactionRequest, TagSpending, TopMerchantItem,
-        TransactionRecord, TransferWalletRequest, TransferWalletResponse,
-        UpdatePreferencesRequest, UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
+        ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery, GlobalSearchResponse,
+        MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, NetWorthPoint,
+        QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse, SpendingAlertItem,
+        SplitTransactionRequest, TagSpending, TopMerchantItem, TransactionRecord,
+        TransferWalletRequest, TransferWalletResponse, UpdatePreferencesRequest,
+        UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
+        WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem,
     },
     routes::AppState,
     services::{
@@ -2117,6 +2119,162 @@ pub async fn spending_forecast(
         projected_month_end_balance,
         net_worth_points,
         alerts,
+    }))
+}
+
+// ================================
+// Global All-Time Search (#1)
+// ================================
+
+pub async fn search_all_transactions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<GlobalSearchQuery>,
+) -> Result<Json<GlobalSearchResponse>, AppError> {
+    let q = params.q.unwrap_or_default().trim().to_string();
+    let pattern = format!("%{}%", q.to_lowercase());
+    let tag_exact = q.trim_start_matches('#').to_lowercase();
+
+    let transactions: Vec<TransactionRecord> = sqlx::query_as(
+        r#"
+        SELECT
+            t.id, t.document_id, t.tx_date, t.vendor, t.description,
+            t.category_id, c.name AS category_name,
+            t.wallet_id, w.name AS wallet_name,
+            t.amount, t.base_amount, t.tx_type, t.currency, t.source, t.status,
+            t.is_recurring, t.is_transfer, t.tags, t.created_at
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        LEFT JOIN wallets w ON w.id = t.wallet_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND (
+              $2 = '%%'
+              OR LOWER(t.vendor) LIKE $2
+              OR LOWER(COALESCE(t.description, '')) LIKE $2
+              OR LOWER(COALESCE(c.name, '')) LIKE $2
+              OR LOWER(COALESCE(w.name, '')) LIKE $2
+              OR $3 = ANY(t.tags)
+          )
+          AND ($4::NUMERIC IS NULL OR COALESCE(t.base_amount, t.amount) >= $4)
+          AND ($5::NUMERIC IS NULL OR COALESCE(t.base_amount, t.amount) <= $5)
+        ORDER BY t.tx_date DESC, t.created_at DESC
+        LIMIT 100
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&pattern)
+    .bind(&tag_exact)
+    .bind(params.min_amount)
+    .bind(params.max_amount)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut total_spent = Decimal::ZERO;
+    let mut total_credit = Decimal::ZERO;
+    for t in &transactions {
+        if t.is_transfer {
+            continue;
+        }
+        let val = t.base_amount.unwrap_or(t.amount);
+        if t.tx_type.eq_ignore_ascii_case("credit") {
+            total_credit += val;
+        } else {
+            total_spent += val;
+        }
+    }
+
+    Ok(Json(GlobalSearchResponse {
+        query: q,
+        base_currency: state.config.default_currency.clone(),
+        total_spent,
+        total_credit,
+        count: transactions.len(),
+        transactions,
+    }))
+}
+
+// ================================
+// Day-of-Week Spending Breakdown (#2)
+// ================================
+
+pub async fn weekday_breakdown(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<WeekdayQuery>,
+) -> Result<Json<WeekdayBreakdownResponse>, AppError> {
+    let months = params.months.unwrap_or(3).clamp(1, 12);
+    let cutoff = Utc::now().date_naive() - chrono::Duration::days((months as i64) * 30);
+
+    let rows: Vec<(i32, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT
+            EXTRACT(ISODOW FROM tx_date)::INT AS dow,
+            COALESCE(SUM(COALESCE(base_amount, amount)), 0) AS total_spent,
+            COUNT(*) AS tx_count
+        FROM transactions
+        WHERE user_id = $1
+          AND status = 'confirmed'
+          AND is_transfer = FALSE
+          AND tx_type = 'debit'
+          AND tx_date >= $2
+        GROUP BY 1
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(cutoff)
+    .fetch_all(&state.db)
+    .await?;
+
+    let labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let mut days: Vec<WeekdaySpendingItem> = Vec::with_capacity(7);
+    let mut busiest_day: Option<String> = None;
+    let mut busiest_amt = Decimal::ZERO;
+
+    for (idx, lbl) in labels.iter().enumerate() {
+        let dow = (idx + 1) as i32;
+        let found = rows.iter().find(|r| r.0 == dow);
+        let total = found.map(|r| r.1).unwrap_or(Decimal::ZERO);
+        let cnt = found.map(|r| r.2).unwrap_or(0);
+        if total > busiest_amt {
+            busiest_amt = total;
+            busiest_day = Some((*lbl).to_string());
+        }
+        days.push(WeekdaySpendingItem {
+            dow,
+            label: (*lbl).to_string(),
+            total_spent: total,
+            tx_count: cnt,
+        });
+    }
+
+    Ok(Json(WeekdayBreakdownResponse {
+        months,
+        base_currency: state.config.default_currency.clone(),
+        busiest_day,
+        days,
+    }))
+}
+
+// ================================
+// Quick Built-In Currency Converter Rates (#3)
+// ================================
+
+pub async fn get_fx_rates(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<FxRatesResponse>, AppError> {
+    let all = state.fx.get_rates().await;
+    let keep = ["USD", "VND", "EUR", "GBP", "JPY", "SGD", "THB", "KRW", "AUD", "CAD"];
+    let mut rates_vs_usd = std::collections::HashMap::new();
+    for code in keep {
+        if let Some(v) = all.get(code) {
+            rates_vs_usd.insert(code.to_string(), *v);
+        }
+    }
+    Ok(Json(FxRatesResponse {
+        base_currency: state.config.default_currency.clone(),
+        rates_vs_usd,
     }))
 }
 

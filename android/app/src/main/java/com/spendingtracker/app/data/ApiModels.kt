@@ -204,7 +204,8 @@ data class GoalRecord(
 data class CreateGoalRequest(
     val name: String,
     @SerializedName("goal_type") val goalType: String = "debt_payoff",
-    @SerializedName("target_amount") val targetAmount: String
+    @SerializedName("target_amount") val targetAmount: String,
+    @SerializedName("target_date") val targetDate: String? = null
 )
 
 data class UpdateGoalRequest(
@@ -457,6 +458,34 @@ data class ForecastAndHealthResponse(
     @SerializedName("projected_month_end_balance") val projectedMonthEndBalance: String = "0",
     @SerializedName("net_worth_points") val netWorthPoints: List<NetWorthPoint> = emptyList(),
     val alerts: List<SpendingAlertItem> = emptyList()
+)
+
+data class GlobalSearchResponse(
+    val query: String,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("total_credit") val totalCredit: String = "0",
+    val count: Int = 0,
+    val transactions: List<TransactionRecord> = emptyList()
+)
+
+data class WeekdaySpendingItem(
+    val dow: Int,
+    val label: String,
+    @SerializedName("total_spent") val totalSpent: String,
+    @SerializedName("tx_count") val txCount: Long
+)
+
+data class WeekdayBreakdownResponse(
+    val months: Int = 3,
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("busiest_day") val busiestDay: String? = null,
+    val days: List<WeekdaySpendingItem> = emptyList()
+)
+
+data class FxRatesResponse(
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("rates_vs_usd") val ratesVsUsd: Map<String, String> = emptyMap()
 )
 
 // --- Error ---

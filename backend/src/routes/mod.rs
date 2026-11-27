@@ -173,6 +173,18 @@ pub fn build_router(state: AppState) -> Router {
             post(extras::bulk_transactions),
         )
         .route(
+            "/api/v1/transactions/search",
+            get(extras::search_all_transactions),
+        )
+        .route(
+            "/api/v1/spending/weekday",
+            get(extras::weekday_breakdown),
+        )
+        .route(
+            "/api/v1/fx/rates",
+            get(extras::get_fx_rates),
+        )
+        .route(
             "/api/v1/tags",
             get(extras::list_tags),
         )

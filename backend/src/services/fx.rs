@@ -67,7 +67,7 @@ impl FxService {
         }
     }
 
-    async fn get_rates(&self) -> HashMap<String, Decimal> {
+    pub async fn get_rates(&self) -> HashMap<String, Decimal> {
         {
             let guard = self.cache.read().await;
             if let Some((fetched_at, ref map)) = *guard {

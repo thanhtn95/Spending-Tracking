@@ -228,4 +228,19 @@ interface SpendingApiService {
     suspend fun updatePreferences(
         @Body request: UpdatePreferencesRequest
     ): Response<UserPreferencesResponse>
+
+    // Global All-Time Search, Day-of-Week Breakdown & FX Converter
+    @GET("api/v1/transactions/search")
+    suspend fun searchAllTransactions(
+        @Query("q") query: String? = null,
+        @Query("min_amount") minAmount: String? = null
+    ): Response<GlobalSearchResponse>
+
+    @GET("api/v1/spending/weekday")
+    suspend fun getWeekdayBreakdown(
+        @Query("months") months: Int = 3
+    ): Response<WeekdayBreakdownResponse>
+
+    @GET("api/v1/fx/rates")
+    suspend fun getFxRates(): Response<FxRatesResponse>
 }

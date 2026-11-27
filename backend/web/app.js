@@ -593,7 +593,7 @@
       ? `/api/v1/transactions?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}&status=${encodeURIComponent(status)}`
       : `/api/v1/transactions?${q}&status=${encodeURIComponent(status)}`;
     try {
-      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs] = await Promise.all([
+      const [summary, txs, trend, budgets, recurring, goals, ious, wallets, templates, rules, tags, comparison, forecast, prefs, weekday, fxRates] = await Promise.all([
         apiFetch(`/api/v1/spending/monthly?${q}`),
         apiFetch(txUrl),
         apiFetch(`/api/v1/spending/trend?months=6`),
@@ -608,6 +608,8 @@
         apiFetch(`/api/v1/spending/comparison?${q}`),
         apiFetch(`/api/v1/spending/forecast?${q}`),
         apiFetch(`/api/v1/preferences`),
+        apiFetch(`/api/v1/spending/weekday?months=3`),
+        apiFetch(`/api/v1/fx/rates`),
       ]);
       state.baseCurrency = summary?.base_currency || "VND";
       state.wallets = wallets || [];
@@ -615,11 +617,16 @@
       state.rules = rules || [];
       state.tags = tags || [];
       if (prefs) state.prefs = prefs;
+      if (fxRates?.rates_vs_usd) {
+        state.fxRates = fxRates.rates_vs_usd;
+        updateFxConverter();
+      }
       state.selectedTxIds.clear();
       syncBulkBar();
       renderSummary(summary);
       renderPreferences(state.prefs);
       renderForecast(forecast);
+      renderWeekday(weekday);
       renderComparison(comparison);
       renderTemplates(state.templates);
       renderWallets(state.wallets);
@@ -1261,6 +1268,7 @@
           name: goalNameEl.value.trim(),
           goal_type: goalTypeEl.value,
           target_amount: goalTargetEl.value,
+          target_date: document.getElementById("goal-date")?.value || null,
         }),
       });
       goalNameEl.value = "";
@@ -1525,6 +1533,81 @@
           </div>`).join("");
       }
     }
+  }
+
+  // --- Day-of-Week Breakdown (#2), Currency Converter (#3) & Global Search (#1) ---
+  function renderWeekday(data) {
+    const el = document.getElementById("weekday-chart");
+    const badge = document.getElementById("weekday-busiest");
+    if (!el || !data?.days) return;
+    if (badge) badge.textContent = data.busiest_day ? `Peak day: ${data.busiest_day}` : "Peak day: —";
+    const maxV = Math.max(1, ...data.days.map((d) => Number(d.total_spent || 0)));
+    el.innerHTML = data.days.map((d) => {
+      const amt = Number(d.total_spent || 0);
+      const h = Math.max(4, Math.round((amt / maxV) * 82));
+      return `
+        <div class="trend-col" title="${d.label}: ${formatNumber(amt)} ${data.base_currency} (${d.tx_count} tx)">
+          <div class="trend-bars">
+            <div class="trend-bar trend-bar-credit" style="height:${h}px;width:16px;"></div>
+          </div>
+          <span class="trend-label">${d.label}</span>
+        </div>`;
+    }).join("");
+  }
+
+  function updateFxConverter() {
+    const amtEl = document.getElementById("fx-amount");
+    const fromEl = document.getElementById("fx-from");
+    const toEl = document.getElementById("fx-to");
+    const resEl = document.getElementById("fx-result");
+    if (!amtEl || !fromEl || !toEl || !resEl || !state.fxRates) return;
+    const amt = Number(amtEl.value || 0);
+    const rFrom = Number(state.fxRates[fromEl.value] || 0);
+    const rTo = Number(state.fxRates[toEl.value] || 0);
+    if (!amt || !rFrom || !rTo) { resEl.textContent = "—"; return; }
+    const out = (amt / rFrom) * rTo;
+    resEl.textContent = `= ${formatNumber(toEl.value === "VND" || toEl.value === "JPY" || toEl.value === "KRW" ? Math.round(out) : Math.round(out * 100) / 100)} ${toEl.value}`;
+  }
+  ["fx-amount", "fx-from", "fx-to"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", updateFxConverter);
+    if (el) el.addEventListener("change", updateFxConverter);
+  });
+
+  const txMinAmountEl = document.getElementById("tx-min-amount");
+  if (txMinAmountEl) txMinAmountEl.addEventListener("input", () => renderTransactions());
+
+  const btnGlobalSearch = document.getElementById("btn-global-search");
+  const globalSearchBanner = document.getElementById("global-search-banner");
+  const globalSearchText = document.getElementById("global-search-text");
+  const btnClearGlobalSearch = document.getElementById("btn-clear-global-search");
+  if (btnGlobalSearch) {
+    btnGlobalSearch.addEventListener("click", async () => {
+      const q = txSearch.value.trim();
+      const minA = txMinAmountEl ? txMinAmountEl.value.trim() : "";
+      const params = new URLSearchParams();
+      if (q) params.set("q", q);
+      if (minA) params.set("min_amount", minA);
+      try {
+        const res = await apiFetch(`/api/v1/transactions/search?${params.toString()}`);
+        state.transactions = res.transactions || [];
+        renderTransactions();
+        if (globalSearchBanner && globalSearchText) {
+          globalSearchText.textContent = `All-Time Search (${res.count} matches): Spent -${formatNumber(res.total_spent)} · Credit +${formatNumber(res.total_credit)} ${res.base_currency}`;
+          globalSearchBanner.classList.remove("hidden");
+        }
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      }
+    });
+  }
+  if (btnClearGlobalSearch) {
+    btnClearGlobalSearch.addEventListener("click", () => {
+      if (globalSearchBanner) globalSearchBanner.classList.add("hidden");
+      txSearch.value = "";
+      if (txMinAmountEl) txMinAmountEl.value = "";
+      refreshDashboard();
+    });
   }
 
   // --- MoM Comparison, Top Merchants, Savings Rate & No-Spend Streak (#2 & #3) ---
@@ -1844,6 +1927,7 @@
 
   function renderTransactions() {
     const query = txSearch.value.trim().toLowerCase();
+    const minAmt = txMinAmountEl && txMinAmountEl.value ? Number(txMinAmountEl.value) : 0;
     const catFilter = txCategoryFilter ? txCategoryFilter.value : "all";
     const walletFilter = txWalletFilter ? txWalletFilter.value : "all";
     const tagFilter = txTagFilter ? txTagFilter.value : "all";
@@ -1852,6 +1936,7 @@
       if (catFilter !== "all" && (t.category_name || "Uncategorized") !== catFilter) return false;
       if (walletFilter !== "all" && t.wallet_id !== walletFilter) return false;
       if (tagFilter !== "all" && !(t.tags || []).includes(tagFilter)) return false;
+      if (minAmt > 0 && Number(t.base_amount ?? t.amount ?? 0) < minAmt) return false;
       if (!query) return true;
       return (t.vendor || "").toLowerCase().includes(query) ||
         (t.tx_date || "").toLowerCase().includes(query) ||

@@ -214,6 +214,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/v1/transactions/duplicates",
             get(extras::scan_duplicates),
         )
+        // v2.0.0: Single-Request Analytics Bundle & 6-Month Category Trend Drilldown
+        .route(
+            "/api/v1/dashboard/analytics",
+            get(extras::dashboard_analytics),
+        )
+        .route(
+            "/api/v1/spending/category-history",
+            get(extras::category_history),
+        )
         .route(
             "/api/v1/tags",
             get(extras::list_tags),

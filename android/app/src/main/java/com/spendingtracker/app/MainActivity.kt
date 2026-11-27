@@ -164,6 +164,20 @@ class MainActivity : FragmentActivity() {
         }
     }
 
+    private val exportCsvLauncher = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val csv = viewModel.buildLedgerCsv()
+                contentResolver.openOutputStream(uri)?.use { it.write(csv.toByteArray()) }
+                Toast.makeText(this, "Ledger CSV saved", Toast.LENGTH_SHORT).show()
+            }.onFailure {
+                Toast.makeText(this, "CSV export failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     private val importBackupLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
@@ -330,6 +344,12 @@ class MainActivity : FragmentActivity() {
                         onApplyBudgetSuggestion = { cat, amt -> viewModel.upsertBudget(cat, amt, false) },
                         onScanDuplicatesClick = { viewModel.scanDuplicates() },
                         onDeleteDuplicateClick = { id -> viewModel.deleteDuplicate(id) },
+                        onSelectCategoryHistory = { cat -> viewModel.loadCategoryHistory(cat) },
+                        onLogBillSplit = { friend, share, owed, people -> viewModel.logBillSplit(friend, share, owed, people) },
+                        onExportCsvClick = {
+                            val ym = state.selectedMonth
+                            exportCsvLauncher.launch("spending-ledger-${ym.year}-${ym.monthValue}.csv")
+                        },
                         onToggleBankAlerts = {
                             val enabling = !state.bankAlertsEnabled
                             viewModel.setBankAlertsEnabled(enabling)

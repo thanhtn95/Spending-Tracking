@@ -620,6 +620,62 @@ data class DuplicateScanResponse(
     val pairs: List<DuplicatePair> = emptyList()
 )
 
+// --- v2.0.0: Single-Request Analytics Bundle, Health Score, Emergency Runway & Category History ---
+
+data class FinancialHealthScore(
+    val score: Int = 0,
+    val grade: String = "—",
+    val tip: String = "",
+    @SerializedName("savings_pts") val savingsPts: Int = 0,
+    @SerializedName("budget_pts") val budgetPts: Int = 0,
+    @SerializedName("rule_pts") val rulePts: Int = 0,
+    @SerializedName("consistency_pts") val consistencyPts: Int = 0
+)
+
+data class EmergencyRunway(
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    @SerializedName("liquid_balance") val liquidBalance: String = "0",
+    @SerializedName("avg_monthly_spend") val avgMonthlySpend: String = "0",
+    @SerializedName("runway_months") val runwayMonths: Double = 0.0,
+    @SerializedName("target_months") val targetMonths: Double = 6.0
+)
+
+data class DashboardAnalyticsResponse(
+    val trend: List<MonthlyTrendPoint> = emptyList(),
+    val recurring: RecurringSummaryResponse? = null,
+    val categories: List<CategoryRecord> = emptyList(),
+    val goals: List<GoalRecord> = emptyList(),
+    val ious: List<IouRecord> = emptyList(),
+    val rules: List<MerchantRuleRecord> = emptyList(),
+    val tags: List<TagSpending> = emptyList(),
+    val comparison: MonthlyComparisonResponse? = null,
+    val forecast: ForecastAndHealthResponse? = null,
+    val weekday: WeekdayBreakdownResponse? = null,
+    @SerializedName("fx_rates") val fxRates: FxRatesResponse? = null,
+    @SerializedName("rule_50_30_20") val rule503020: Rule503020Response? = null,
+    @SerializedName("yearly_wrapped") val yearlyWrapped: YearlyWrappedResponse? = null,
+    @SerializedName("subscription_audit") val subscriptionAudit: SubscriptionAuditResponse? = null,
+    @SerializedName("health_score") val healthScore: FinancialHealthScore? = null,
+    @SerializedName("emergency_runway") val emergencyRunway: EmergencyRunway? = null
+)
+
+data class CategoryMonthPoint(
+    val year: Int,
+    val month: Int,
+    val label: String,
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("tx_count") val txCount: Long = 0
+)
+
+data class CategoryHistoryResponse(
+    @SerializedName("category_name") val categoryName: String = "",
+    @SerializedName("base_currency") val baseCurrency: String = "VND",
+    val months: Int = 6,
+    @SerializedName("total_spent") val totalSpent: String = "0",
+    @SerializedName("avg_monthly") val avgMonthly: String = "0",
+    val points: List<CategoryMonthPoint> = emptyList()
+)
+
 // --- Error ---
 
 data class ApiErrorEnvelope(

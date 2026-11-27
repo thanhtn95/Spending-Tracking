@@ -276,6 +276,43 @@
 
       <!-- TAB: PLANNING -->
       <div data-tab-panel="planning" class="hidden">
+      <!-- v2.0.0: Financial Health Score & Emergency Fund Runway -->
+      <div class="grid-main" style="margin-bottom:20px;">
+        <section class="card">
+          <div class="section-head">
+            <h2>Financial Health Score</h2>
+            <span id="health-grade-badge" class="badge-subtle mono">—</span>
+          </div>
+          <div id="health-score-body">
+            <div class="empty-block">Loading financial health score...</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>Emergency Fund Runway</h2>
+            <span id="runway-months-badge" class="badge-subtle mono">— mo</span>
+          </div>
+          <div id="runway-body">
+            <div class="empty-block">Calculating liquid wallet runway...</div>
+          </div>
+        </section>
+      </div>
+
+      <!-- v2.0.0: 6-Month Category Trend Drilldown -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>6-Month Category Trend</h2>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <select id="cat-history-select" aria-label="Select category for 6-month trend" style="width:auto;"></select>
+            <span id="cat-history-avg" class="badge-subtle mono">Avg: —</span>
+          </div>
+        </div>
+        <div id="cat-history-chart" class="trend-chart" style="height:110px;">
+          <div class="empty-block">Select a category to inspect its 6-month trend.</div>
+        </div>
+      </section>
+
       <!-- Forecast, Net Worth Line Chart & Smart Alerts (#2, #4, #5) -->
       <section class="card" style="margin-bottom:20px;">
         <div class="section-head">
@@ -571,6 +608,24 @@
             <option value="GBP">GBP</option><option value="KRW">KRW</option>
           </select>
           <div id="fx-result" class="mono" style="font-weight:600;align-self:center;">—</div>
+        </div>
+      </section>
+
+      <!-- v2.0.0: Bill-Split + Auto-IOU Helper -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Bill-Split &amp; Auto-IOU Helper</h2>
+          <span id="billsplit-per-person" class="badge-subtle mono">Per person: —</span>
+        </div>
+        <div class="inline-form-4" style="margin-bottom:10px;">
+          <input id="billsplit-total" class="mono" type="number" min="1" placeholder="Total bill" />
+          <input id="billsplit-tip" class="mono" type="number" min="0" step="1" value="0" placeholder="Tip/Tax %" />
+          <input id="billsplit-people" class="mono" type="number" min="2" value="2" placeholder="People" />
+          <input id="billsplit-friend" type="text" placeholder="Friend / Group name (for IOU)" />
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+          <button id="btn-billsplit-log" class="btn btn-primary btn-sm" type="button">Log My Share + Create IOU</button>
+          <span id="billsplit-summary" class="muted" style="font-size:0.82rem;">Enter total and people count to split.</span>
         </div>
       </section>
 

@@ -9,6 +9,7 @@ import com.spendingtracker.app.data.BudgetRecord
 import com.spendingtracker.app.data.BudgetSuggestionsResponse
 import com.spendingtracker.app.data.BulkTransactionsRequest
 import com.spendingtracker.app.data.CachedDashboardSnapshot
+import com.spendingtracker.app.data.CategoryHistoryResponse
 import com.spendingtracker.app.data.CategorySpending
 import com.spendingtracker.app.data.ChangePasswordRequest
 import com.spendingtracker.app.data.ConfirmTransactionItem
@@ -22,6 +23,8 @@ import com.spendingtracker.app.data.CreateWalletRequest
 import com.spendingtracker.app.data.DashboardCache
 import com.spendingtracker.app.data.DraftTransactionPreview
 import com.spendingtracker.app.data.DuplicateScanResponse
+import com.spendingtracker.app.data.EmergencyRunway
+import com.spendingtracker.app.data.FinancialHealthScore
 import com.spendingtracker.app.data.ForecastAndHealthResponse
 import com.spendingtracker.app.data.FxRatesResponse
 import com.spendingtracker.app.data.GlobalSearchResponse
@@ -120,6 +123,9 @@ data class UiState(
     val incomeByCategory: List<CategorySpending> = emptyList(),
     val paceVsLastMonth: PaceComparison? = null,
     val duplicates: DuplicateScanResponse? = null,
+    val healthScore: FinancialHealthScore? = null,
+    val emergencyRunway: EmergencyRunway? = null,
+    val categoryHistory: CategoryHistoryResponse? = null,
     val transactions: List<TransactionRecord> = emptyList(),
     val wallets: List<WalletRecord> = emptyList(),
     val templates: List<QuickTemplateRecord> = emptyList(),
@@ -538,56 +544,28 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                         )
                     }
 
-                    // Stage 2: Secondary Plan & More analytics in parallel (non-blocking)
-                    supervisorScope {
-                        val trendDef = async { runCatching { api.getSpendingTrend(6) }.getOrNull() }
-                        val recDef = async { runCatching { api.getRecurring() }.getOrNull() }
-                        val catsDef = async { runCatching { api.getCategories() }.getOrNull() }
-                        val goalsDef = async { runCatching { api.getGoals() }.getOrNull() }
-                        val iousDef = async { runCatching { api.getIous() }.getOrNull() }
-                        val rulesDef = async { runCatching { api.getRules() }.getOrNull() }
-                        val tagsDef = async { runCatching { api.getTags() }.getOrNull() }
-                        val compDef = async { runCatching { api.getMonthlyComparison(ym.year, ym.monthValue) }.getOrNull() }
-                        val foreDef = async { runCatching { api.getForecast(ym.year, ym.monthValue) }.getOrNull() }
-                        val wdDef = async { runCatching { api.getWeekdayBreakdown(3) }.getOrNull() }
-                        val fxDef = async { runCatching { api.getFxRates() }.getOrNull() }
-                        val rule50Def = async { runCatching { api.getRule503020(ym.year, ym.monthValue) }.getOrNull() }
-                        val yearlyDef = async { runCatching { api.getYearlyWrapped(wrappedYear) }.getOrNull() }
-                        val subDef = async { runCatching { api.getSubscriptionAudit() }.getOrNull() }
-
-                        val trendRes = trendDef.await()
-                        val recurringRes = recDef.await()
-                        val catsRes = catsDef.await()
-                        val goalsRes = goalsDef.await()
-                        val iousRes = iousDef.await()
-                        val rulesRes = rulesDef.await()
-                        val tagsRes = tagsDef.await()
-                        val compRes = compDef.await()
-                        val forecastRes = foreDef.await()
-                        val weekdayRes = wdDef.await()
-                        val fxRes = fxDef.await()
-                        val rule503020Res = rule50Def.await()
-                        val yearlyRes = yearlyDef.await()
-                        val subAuditRes = subDef.await()
-
+                    // Stage 2 (v2.0.0): Single-request gzipped analytics bundle (replaces 14 calls with 1!)
+                    val anRes = runCatching { api.getDashboardAnalytics(ym.year, ym.monthValue, wrappedYear) }.getOrNull()
+                    if (anRes?.isSuccessful == true && anRes.body() != null) {
+                        val an = anRes.body()!!
                         _uiState.update {
                             it.copy(
-                                comparison = if (compRes?.isSuccessful == true) compRes.body() else it.comparison,
-                                forecast = if (forecastRes?.isSuccessful == true) forecastRes.body() else it.forecast,
-                                weekdayBreakdown = if (weekdayRes?.isSuccessful == true) weekdayRes.body() else it.weekdayBreakdown,
-                                fxRates = if (fxRes?.isSuccessful == true) fxRes.body() else it.fxRates,
-                                rule503020 = if (rule503020Res?.isSuccessful == true) rule503020Res.body() else it.rule503020,
-                                yearlyWrapped = if (yearlyRes?.isSuccessful == true) yearlyRes.body() else it.yearlyWrapped,
-                                subscriptionAudit = if (subAuditRes?.isSuccessful == true) subAuditRes.body() else it.subscriptionAudit,
-                                rules = if (rulesRes?.isSuccessful == true) rulesRes.body().orEmpty() else it.rules,
-                                tags = if (tagsRes?.isSuccessful == true) tagsRes.body().orEmpty() else it.tags,
-                                trend = if (trendRes?.isSuccessful == true) trendRes.body().orEmpty() else it.trend,
-                                recurring = if (recurringRes?.isSuccessful == true) recurringRes.body() else it.recurring,
-                                goals = if (goalsRes?.isSuccessful == true) goalsRes.body().orEmpty() else it.goals,
-                                ious = if (iousRes?.isSuccessful == true) iousRes.body().orEmpty() else it.ious,
-                                categories = if (catsRes?.isSuccessful == true && !catsRes.body().isNullOrEmpty()) {
-                                    catsRes.body()!!.map { c -> c.name }
-                                } else it.categories
+                                comparison = an.comparison ?: it.comparison,
+                                forecast = an.forecast ?: it.forecast,
+                                weekdayBreakdown = an.weekday ?: it.weekdayBreakdown,
+                                fxRates = an.fxRates ?: it.fxRates,
+                                rule503020 = an.rule503020 ?: it.rule503020,
+                                yearlyWrapped = an.yearlyWrapped ?: it.yearlyWrapped,
+                                subscriptionAudit = an.subscriptionAudit ?: it.subscriptionAudit,
+                                healthScore = an.healthScore ?: it.healthScore,
+                                emergencyRunway = an.emergencyRunway ?: it.emergencyRunway,
+                                rules = an.rules,
+                                tags = an.tags,
+                                trend = an.trend,
+                                recurring = an.recurring ?: it.recurring,
+                                goals = an.goals,
+                                ious = an.ious,
+                                categories = if (an.categories.isNotEmpty()) an.categories.map { c -> c.name } else it.categories
                             )
                         }
                     }
@@ -951,23 +929,30 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun deleteTransaction(id: String) {
+        val prevList = _uiState.value.transactions
+        // Optimistic UI removal in 0ms
+        _uiState.update {
+            it.copy(
+                transactions = it.transactions.filterNot { tx -> tx.id == id },
+                errorMessage = null
+            )
+        }
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
             try {
                 val res = api.deleteTransaction(id)
                 if (res.isSuccessful) {
-                    _uiState.update { it.copy(isLoading = false, statusMessage = "Transaction deleted") }
+                    _uiState.update { it.copy(statusMessage = "Transaction deleted") }
                     refreshDashboard()
                 } else {
                     _uiState.update {
-                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                        it.copy(transactions = prevList, errorMessage = ApiClient.parseErrorMessage(res))
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _uiState.update {
-                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Delete failed")
+                    it.copy(transactions = prevList, errorMessage = e.localizedMessage ?: "Delete failed")
                 }
             }
         }
@@ -1354,6 +1339,77 @@ class SpendingViewModel(application: Application) : AndroidViewModel(application
                 throw e
             } catch (_: Exception) {}
         }
+    }
+
+    // --- v2.0.0: Category 6-Month History, Bill-Split Auto-IOU & Ledger CSV Export ---
+    fun loadCategoryHistory(categoryName: String) {
+        val clean = categoryName.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val res = api.getCategoryHistory(clean, 6)
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update { it.copy(categoryHistory = res.body()) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun logBillSplit(friendName: String, myShare: String, owedToMe: String, people: Int) {
+        viewModelScope.launch {
+            val cur = _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+            val label = friendName.trim().ifEmpty { "Group (${people - 1} friends)" }
+            try {
+                val txRes = api.createTransaction(
+                    CreateTransactionRequest(
+                        txDate = java.time.LocalDate.now().toString(),
+                        vendor = "Split Bill ($label)",
+                        categoryName = "Dining",
+                        amount = myShare,
+                        txType = "debit",
+                        currency = cur
+                    )
+                )
+                val iouRes = api.createIou(
+                    CreateIouRequest(
+                        personName = label,
+                        direction = "owed_to_me",
+                        amount = owedToMe
+                    )
+                )
+                if (txRes.isSuccessful && iouRes.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Logged your share & created IOU for $label") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = "Bill split partially failed") }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Bill split failed") }
+            }
+        }
+    }
+
+    fun buildLedgerCsv(): String {
+        val header = "Date,Vendor,Category,Wallet,Type,Amount,Currency,Tags,Description\n"
+        fun esc(s: String?) = "\"${(s ?: "").replace("\"", "\"\"")}\""
+        val rows = _uiState.value.transactions.joinToString("\n") { t ->
+            listOf(
+                esc(t.txDate),
+                esc(t.vendor),
+                esc(t.categoryName ?: "Uncategorized"),
+                esc(t.walletName ?: ""),
+                esc(t.txType),
+                esc(t.amount),
+                esc(t.currency),
+                esc(t.tags.joinToString(" ")),
+                esc(t.description ?: "")
+            ).joinToString(",")
+        }
+        return header + rows + "\n"
     }
 
     // --- Merchant Rules (#6) ---

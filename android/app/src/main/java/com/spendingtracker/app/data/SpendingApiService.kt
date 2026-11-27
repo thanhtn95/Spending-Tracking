@@ -279,4 +279,18 @@ interface SpendingApiService {
 
     @GET("api/v1/transactions/duplicates")
     suspend fun scanDuplicates(): Response<DuplicateScanResponse>
+
+    // v2.0.0: Single-Request Analytics Bundle & 6-Month Category Trend
+    @GET("api/v1/dashboard/analytics")
+    suspend fun getDashboardAnalytics(
+        @Query("year") year: Int,
+        @Query("month") month: Int,
+        @Query("wrapped_year") wrappedYear: Int
+    ): Response<DashboardAnalyticsResponse>
+
+    @GET("api/v1/spending/category-history")
+    suspend fun getCategoryHistory(
+        @Query("category") category: String,
+        @Query("months") months: Int = 6
+    ): Response<CategoryHistoryResponse>
 }

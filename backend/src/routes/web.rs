@@ -26,7 +26,7 @@ pub async fn styles_css() -> impl IntoResponse {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "text/css; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            (header::CACHE_CONTROL, "public, max-age=3600, stale-while-revalidate=86400"),
         ],
         STYLES_CSS,
     )
@@ -37,7 +37,7 @@ pub async fn app_js() -> impl IntoResponse {
         StatusCode::OK,
         [
             (header::CONTENT_TYPE, "application/javascript; charset=utf-8"),
-            (header::CACHE_CONTROL, "public, max-age=3600"),
+            (header::CACHE_CONTROL, "public, max-age=3600, stale-while-revalidate=86400"),
         ],
         APP_JS,
     )

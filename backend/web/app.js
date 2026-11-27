@@ -629,41 +629,33 @@
       renderBudgets(budgets);
       renderSafeToSpend(budgets);
 
-      // Stage 2: Secondary Planning & Tools analytics in parallel (non-blocking)
-      Promise.all([
-        apiFetch(`/api/v1/spending/trend?months=6`).catch(() => []),
-        apiFetch(`/api/v1/recurring`).catch(() => null),
-        apiFetch(`/api/v1/goals`).catch(() => []),
-        apiFetch(`/api/v1/ious`).catch(() => []),
-        apiFetch(`/api/v1/rules`).catch(() => []),
-        apiFetch(`/api/v1/tags`).catch(() => []),
-        apiFetch(`/api/v1/spending/comparison?${q}`).catch(() => null),
-        apiFetch(`/api/v1/spending/forecast?${q}`).catch(() => null),
-        apiFetch(`/api/v1/spending/weekday?months=3`).catch(() => null),
-        apiFetch(`/api/v1/fx/rates`).catch(() => null),
-        apiFetch(`/api/v1/spending/rule-50-30-20?${q}`).catch(() => null),
-        apiFetch(`/api/v1/spending/yearly?year=${state.wrappedYear || state.year}`).catch(() => null),
-        apiFetch(`/api/v1/spending/subscriptions`).catch(() => null),
-      ]).then(([trend, recurring, goals, ious, rules, tags, comparison, forecast, weekday, fxRates, rule503020, yearly, subAudit]) => {
-        state.rules = rules || [];
-        state.tags = tags || [];
-        if (fxRates?.rates_vs_usd) {
-          state.fxRates = fxRates.rates_vs_usd;
-          updateFxConverter();
-        }
-        renderForecast(forecast);
-        renderWeekday(weekday);
-        renderComparison(comparison);
-        renderRule503020(rule503020);
-        renderYearlyWrapped(yearly);
-        renderSubscriptionAudit(subAudit);
-        renderRules(state.rules);
-        syncTagFilter(state.tags);
-        renderTrend(trend || []);
-        renderRecurring(recurring);
-        renderGoals(goals || []);
-        renderIous(ious || []);
-      });
+      // Stage 2 (v2.0.0): Single-request gzipped analytics bundle (replaces 13 calls with 1)
+      apiFetch(`/api/v1/dashboard/analytics?${q}&wrapped_year=${state.wrappedYear || state.year}`)
+        .then((an) => {
+          if (!an) return;
+          state.rules = an.rules || [];
+          state.tags = an.tags || [];
+          if (an.fx_rates?.rates_vs_usd) {
+            state.fxRates = an.fx_rates.rates_vs_usd;
+            updateFxConverter();
+          }
+          renderHealthScore(an.health_score);
+          renderEmergencyRunway(an.emergency_runway);
+          renderForecast(an.forecast);
+          renderWeekday(an.weekday);
+          renderComparison(an.comparison);
+          renderRule503020(an.rule_50_30_20);
+          renderYearlyWrapped(an.yearly_wrapped);
+          renderSubscriptionAudit(an.subscription_audit);
+          renderRules(state.rules);
+          syncTagFilter(state.tags);
+          renderTrend(an.trend || []);
+          renderRecurring(an.recurring);
+          renderGoals(an.goals || []);
+          renderIous(an.ious || []);
+          syncCategoryHistorySelect();
+        })
+        .catch(() => {});
       if (state.rangeMode && state.rangeStart && state.rangeEnd) {
         const rangeRes = await apiFetch(
           `/api/v1/spending/range?start_date=${encodeURIComponent(state.rangeStart)}&end_date=${encodeURIComponent(state.rangeEnd)}`
@@ -2000,6 +1992,142 @@
       } catch (err) {
         if (err.message !== "Unauthorized") showToast(err.message);
         btn.disabled = false;
+      }
+    });
+  }
+
+  // --- v2.0.0: Financial Health Score, Emergency Runway, Category History & Bill-Split Helper ---
+  function renderHealthScore(h) {
+    const body = document.getElementById("health-score-body");
+    const badge = document.getElementById("health-grade-badge");
+    if (!body || !h) return;
+    if (badge) badge.textContent = `${h.grade} · ${h.score}/100`;
+    const barColor = h.score >= 80 ? "var(--accent)" : (h.score >= 60 ? "var(--warn)" : "var(--danger)");
+    body.innerHTML = `
+      <div class="cat-bar-track" style="height:10px;margin-bottom:10px;">
+        <div class="cat-bar-fill" style="width:${h.score}%;background:${barColor}"></div>
+      </div>
+      <div class="muted" style="font-size:0.82rem;margin-bottom:10px;">${escapeHtml(h.tip)}</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:0.75rem;">
+        <div class="recurring-card"><div class="muted">Savings</div><div class="mono" style="font-weight:700;">${h.savings_pts}/35</div></div>
+        <div class="recurring-card"><div class="muted">Budgets</div><div class="mono" style="font-weight:700;">${h.budget_pts}/25</div></div>
+        <div class="recurring-card"><div class="muted">50/30/20</div><div class="mono" style="font-weight:700;">${h.rule_pts}/20</div></div>
+        <div class="recurring-card"><div class="muted">Habit</div><div class="mono" style="font-weight:700;">${h.consistency_pts}/20</div></div>
+      </div>`;
+  }
+
+  function renderEmergencyRunway(r) {
+    const body = document.getElementById("runway-body");
+    const badge = document.getElementById("runway-months-badge");
+    if (!body || !r) return;
+    if (badge) badge.textContent = `${r.runway_months} / ${r.target_months} mo`;
+    const pct = Math.min(100, Math.round((r.runway_months / (r.target_months || 6)) * 100));
+    const color = r.runway_months >= 6 ? "var(--accent)" : (r.runway_months >= 3 ? "var(--warn)" : "var(--danger)");
+    body.innerHTML = `
+      <div style="font-size:1.35rem;font-weight:700;margin-bottom:6px;" class="mono">${r.runway_months} months</div>
+      <div class="cat-bar-track" style="height:10px;margin-bottom:10px;">
+        <div class="cat-bar-fill" style="width:${pct}%;background:${color}"></div>
+      </div>
+      <div class="muted" style="font-size:0.8rem;">
+        Liquid wallets: <strong class="mono">${formatNumber(r.liquid_balance)} ${escapeHtml(r.base_currency)}</strong> ·
+        3M avg spend: <strong class="mono">${formatNumber(r.avg_monthly_spend)}/mo</strong>
+      </div>`;
+  }
+
+  const catHistorySelect = document.getElementById("cat-history-select");
+  async function loadCategoryHistory(catName) {
+    const chartEl = document.getElementById("cat-history-chart");
+    const avgEl = document.getElementById("cat-history-avg");
+    if (!chartEl || !catName) return;
+    try {
+      const res = await apiFetch(`/api/v1/spending/category-history?category=${encodeURIComponent(catName)}&months=6`);
+      if (avgEl) avgEl.textContent = `Avg: ${formatNumber(res.avg_monthly)} ${res.base_currency}/mo`;
+      const pts = res.points || [];
+      const maxV = Math.max(1, ...pts.map((p) => Number(p.total_spent || 0)));
+      chartEl.innerHTML = pts.map((p) => {
+        const amt = Number(p.total_spent || 0);
+        const h = Math.max(4, Math.round((amt / maxV) * 82));
+        return `
+          <div class="trend-col" title="${p.label} ${p.year}: ${formatNumber(amt)} ${res.base_currency} (${p.tx_count} tx)">
+            <div class="trend-bars"><div class="trend-bar trend-bar-debit" style="height:${h}px;width:16px;"></div></div>
+            <span class="trend-label">${p.label}</span>
+          </div>`;
+      }).join("");
+    } catch (_) {}
+  }
+
+  function syncCategoryHistorySelect() {
+    if (!catHistorySelect) return;
+    const prev = catHistorySelect.value || "Dining";
+    catHistorySelect.innerHTML = CATEGORIES.map((c) =>
+      `<option value="${escapeHtml(c)}" ${c === prev ? "selected" : ""}>${escapeHtml(c)}</option>`
+    ).join("");
+    loadCategoryHistory(catHistorySelect.value);
+  }
+  if (catHistorySelect) {
+    catHistorySelect.addEventListener("change", () => loadCategoryHistory(catHistorySelect.value));
+  }
+
+  // Bill-Split + Auto-IOU Helper
+  function updateBillSplitPreview() {
+    const total = Number(document.getElementById("billsplit-total")?.value || 0);
+    const tip = Number(document.getElementById("billsplit-tip")?.value || 0);
+    const people = Math.max(2, Number(document.getElementById("billsplit-people")?.value || 2));
+    const perEl = document.getElementById("billsplit-per-person");
+    const sumEl = document.getElementById("billsplit-summary");
+    if (!total || total <= 0) {
+      if (perEl) perEl.textContent = "Per person: —";
+      if (sumEl) sumEl.textContent = "Enter total and people count to split.";
+      return null;
+    }
+    const grand = Math.round(total * (1 + tip / 100));
+    const share = Math.round(grand / people);
+    const owed = grand - share;
+    if (perEl) perEl.textContent = `Per person: ${formatNumber(share)} ${state.baseCurrency}`;
+    if (sumEl) sumEl.textContent = `Grand total ${formatNumber(grand)} · Your share: ${formatNumber(share)} · Others owe you: ${formatNumber(owed)} ${state.baseCurrency}`;
+    return { grand, share, owed, people };
+  }
+  ["billsplit-total", "billsplit-tip", "billsplit-people"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener("input", updateBillSplitPreview);
+  });
+  const btnBillSplitLog = document.getElementById("btn-billsplit-log");
+  if (btnBillSplitLog) {
+    btnBillSplitLog.addEventListener("click", async () => {
+      const calc = updateBillSplitPreview();
+      if (!calc) { showToast("Enter a valid bill total first."); return; }
+      const friend = (document.getElementById("billsplit-friend")?.value || "").trim() || `Group (${calc.people - 1} friends)`;
+      btnBillSplitLog.disabled = true;
+      try {
+        await apiFetch("/api/v1/transactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            tx_date: new Date().toISOString().slice(0, 10),
+            vendor: `Split Bill (${friend})`,
+            category_name: "Dining",
+            amount: String(calc.share),
+            currency: state.baseCurrency || "VND",
+            tx_type: "debit",
+          }),
+        });
+        await apiFetch("/api/v1/ious", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            person_name: friend,
+            direction: "owed_to_me",
+            amount: String(calc.owed),
+            currency: state.baseCurrency || "VND",
+            note: `Bill split (${calc.people} people)`,
+          }),
+        });
+        showToast(`Logged your share (${formatNumber(calc.share)}) & created IOU for ${friend}!`);
+        await refreshDashboard();
+      } catch (err) {
+        if (err.message !== "Unauthorized") showToast(err.message);
+      } finally {
+        btnBillSplitLog.disabled = false;
       }
     });
   }

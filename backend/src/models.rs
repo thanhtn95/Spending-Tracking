@@ -918,3 +918,77 @@ pub struct DuplicateScanResponse {
     pub count: usize,
     pub pairs: Vec<DuplicatePair>,
 }
+
+// --- v2.0.0: Single-Request Analytics Bundle, Financial Health Score, Emergency Runway & Category History ---
+
+#[derive(Debug, Deserialize)]
+pub struct AnalyticsBundleQuery {
+    pub year: i32,
+    pub month: u32,
+    pub wrapped_year: Option<i32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FinancialHealthScore {
+    pub score: i32,
+    pub grade: String,
+    pub tip: String,
+    pub savings_pts: i32,
+    pub budget_pts: i32,
+    pub rule_pts: i32,
+    pub consistency_pts: i32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmergencyRunway {
+    pub base_currency: String,
+    pub liquid_balance: Decimal,
+    pub avg_monthly_spend: Decimal,
+    pub runway_months: f64,
+    pub target_months: f64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DashboardAnalyticsResponse {
+    pub trend: Vec<MonthlyTrendPoint>,
+    pub recurring: RecurringSummaryResponse,
+    pub categories: Vec<CategoryRecord>,
+    pub goals: Vec<GoalRecord>,
+    pub ious: Vec<IouRecord>,
+    pub rules: Vec<MerchantRuleRecord>,
+    pub tags: Vec<TagSpending>,
+    pub comparison: MonthlyComparisonResponse,
+    pub forecast: ForecastAndHealthResponse,
+    pub weekday: WeekdayBreakdownResponse,
+    pub fx_rates: FxRatesResponse,
+    pub rule_50_30_20: Rule503020Response,
+    pub yearly_wrapped: YearlyWrappedResponse,
+    pub subscription_audit: SubscriptionAuditResponse,
+    pub health_score: FinancialHealthScore,
+    pub emergency_runway: EmergencyRunway,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CategoryHistoryQuery {
+    pub category: String,
+    pub months: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoryMonthPoint {
+    pub year: i32,
+    pub month: u32,
+    pub label: String,
+    pub total_spent: Decimal,
+    pub tx_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CategoryHistoryResponse {
+    pub category_name: String,
+    pub base_currency: String,
+    pub months: u32,
+    pub total_spent: Decimal,
+    pub avg_monthly: Decimal,
+    pub points: Vec<CategoryMonthPoint>,
+}

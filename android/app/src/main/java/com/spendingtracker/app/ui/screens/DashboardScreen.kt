@@ -150,6 +150,9 @@ fun DashboardScreen(
     onApplyBudgetSuggestion: (String, String) -> Unit,
     onScanDuplicatesClick: () -> Unit,
     onDeleteDuplicateClick: (String) -> Unit,
+    onSelectCategoryHistory: (String) -> Unit,
+    onLogBillSplit: (String, String, String, Int) -> Unit,
+    onExportCsvClick: () -> Unit,
     onToggleBankAlerts: () -> Unit,
     onReviewPendingClick: () -> Unit,
     onFlushOfflineClick: () -> Unit,
@@ -909,6 +912,26 @@ fun DashboardScreen(
                 }
 
                 // v1.8.0: 50/30/20 Rule Card
+                state.healthScore?.let { hs ->
+                    item {
+                        HealthAndRunwayCard(
+                            health = hs,
+                            runway = state.emergencyRunway,
+                            privacyMode = state.privacyMode
+                        )
+                    }
+                }
+
+                // v2.0.0: 6-Month Category Trend Drilldown Card
+                item {
+                    CategoryHistoryCard(
+                        categories = state.categories,
+                        history = state.categoryHistory,
+                        privacyMode = state.privacyMode,
+                        onSelectCategory = onSelectCategoryHistory
+                    )
+                }
+
                 state.rule503020?.let { rule ->
                     item {
                         Rule503020Card(rule = rule, privacyMode = state.privacyMode)
@@ -1979,6 +2002,13 @@ fun DashboardScreen(
 
                 // v1.9.0: Duplicate Transaction Scanner Card — More tab
                 if (selectedTab == 3) {
+                    item {
+                        BillSplitAndCsvCard(
+                            baseCurrency = baseCurrency,
+                            onLogBillSplit = onLogBillSplit,
+                            onExportCsvClick = onExportCsvClick
+                        )
+                    }
                     item {
                         Card(
                             shape = RoundedCornerShape(16.dp),
@@ -3059,6 +3089,282 @@ private fun YearlyWrappedCard(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HealthAndRunwayCard(
+    health: com.spendingtracker.app.data.FinancialHealthScore,
+    runway: com.spendingtracker.app.data.EmergencyRunway?,
+    privacyMode: Boolean
+) {
+    fun mask(s: String) = if (privacyMode) "••••••" else s
+    val scoreColor = when {
+        health.score >= 80 -> MaterialTheme.colorScheme.primary
+        health.score >= 60 -> Color(0xFFD97706)
+        else -> MaterialTheme.colorScheme.error
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "FINANCIAL HEALTH SCORE",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = "${health.grade} · ${health.score}/100",
+                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    fontWeight = FontWeight.Bold,
+                    color = scoreColor
+                )
+            }
+            LinearProgressIndicator(
+                progress = { (health.score / 100f).coerceIn(0f, 1f) },
+                color = scoreColor,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                strokeCap = StrokeCap.Round,
+                modifier = Modifier.fillMaxWidth().height(8.dp)
+            )
+            Text(
+                text = health.tip,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Savings ${health.savingsPts}/35", style = MaterialTheme.typography.labelSmall)
+                Text("Budgets ${health.budgetPts}/25", style = MaterialTheme.typography.labelSmall)
+                Text("50/30/20 ${health.rulePts}/20", style = MaterialTheme.typography.labelSmall)
+                Text("Habit ${health.consistencyPts}/20", style = MaterialTheme.typography.labelSmall)
+            }
+            if (runway != null) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "EMERGENCY FUND RUNWAY",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = "${runway.runwayMonths} / ${runway.targetMonths.toInt()} mo",
+                        style = MaterialTheme.typography.labelLarge.copy(fontFeatureSettings = "tnum"),
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                LinearProgressIndicator(
+                    progress = { (runway.runwayMonths / runway.targetMonths.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f) },
+                    color = MaterialTheme.colorScheme.primary,
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                    strokeCap = StrokeCap.Round,
+                    modifier = Modifier.fillMaxWidth().height(6.dp)
+                )
+                Text(
+                    text = "Liquid wallets: ${mask("${formatAmount(runway.liquidBalance)} ${runway.baseCurrency}")} · 3M avg: ${mask("${formatAmount(runway.avgMonthlySpend)}/mo")}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CategoryHistoryCard(
+    categories: List<String>,
+    history: com.spendingtracker.app.data.CategoryHistoryResponse?,
+    privacyMode: Boolean,
+    onSelectCategory: (String) -> Unit
+) {
+    fun mask(s: String) = if (privacyMode) "••••••" else s
+    val quickCats = remember(categories) {
+        categories.filterNot { it in listOf("Salary", "Income", "Refund", "Transfer") }.take(8)
+    }
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "6-MONTH CATEGORY TREND",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                history?.let {
+                    Text(
+                        text = "Avg: ${mask("${formatAmount(it.avgMonthly)} ${it.baseCurrency}/mo")}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(quickCats) { cat ->
+                    FilterChip(
+                        selected = history?.categoryName.equals(cat, ignoreCase = true),
+                        onClick = { onSelectCategory(cat) },
+                        label = { Text(cat) }
+                    )
+                }
+            }
+            if (history == null || history.points.isEmpty()) {
+                Text(
+                    text = "Tap any category chip above to inspect its 6-month spending trend.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                val maxV = history.points.maxOfOrNull { it.totalSpent.toDoubleOrNull() ?: 0.0 }?.coerceAtLeast(1.0) ?: 1.0
+                Row(
+                    modifier = Modifier.fillMaxWidth().height(76.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    history.points.forEach { pt ->
+                        val ratio = ((pt.totalSpent.toDoubleOrNull() ?: 0.0) / maxV).toFloat().coerceIn(0f, 1f)
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Bottom,
+                            modifier = Modifier.weight(1f).fillMaxHeight()
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(14.dp)
+                                    .height((ratio * 50f).coerceAtLeast(3f).dp)
+                                    .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(pt.label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BillSplitAndCsvCard(
+    baseCurrency: String,
+    onLogBillSplit: (String, String, String, Int) -> Unit,
+    onExportCsvClick: () -> Unit
+) {
+    var totalStr by remember { mutableStateOf("") }
+    var tipStr by remember { mutableStateOf("0") }
+    var peopleStr by remember { mutableStateOf("2") }
+    var friendName by remember { mutableStateOf("") }
+
+    val totalNum = totalStr.toDoubleOrNull() ?: 0.0
+    val tipNum = tipStr.toDoubleOrNull() ?: 0.0
+    val people = (peopleStr.toIntOrNull() ?: 2).coerceAtLeast(2)
+    val grand = Math.round(totalNum * (1.0 + tipNum / 100.0))
+    val share = if (grand > 0) Math.round(grand.toDouble() / people) else 0L
+    val owed = (grand - share).coerceAtLeast(0L)
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "BILL SPLIT & CSV EXPORT",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TextButton(onClick = onExportCsvClick) {
+                    Text("Export CSV")
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = totalStr,
+                    onValueChange = { totalStr = it },
+                    label = { Text("Total") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1.4f)
+                )
+                OutlinedTextField(
+                    value = tipStr,
+                    onValueChange = { tipStr = it },
+                    label = { Text("Tip %") },
+                    singleLine = true,
+                    modifier = Modifier.weight(0.8f)
+                )
+                OutlinedTextField(
+                    value = peopleStr,
+                    onValueChange = { peopleStr = it },
+                    label = { Text("Ppl") },
+                    singleLine = true,
+                    modifier = Modifier.weight(0.8f)
+                )
+            }
+            OutlinedTextField(
+                value = friendName,
+                onValueChange = { friendName = it },
+                label = { Text("Friend / Group name (for IOU)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            if (share > 0) {
+                Text(
+                    text = "Your share: ${formatAmount(share.toString())} $baseCurrency · Others owe you: ${formatAmount(owed.toString())} $baseCurrency",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Button(
+                onClick = {
+                    if (share > 0) {
+                        onLogBillSplit(friendName, share.toString(), owed.toString(), people)
+                        totalStr = ""
+                        friendName = ""
+                    }
+                },
+                enabled = share > 0,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Log My Share + Create IOU")
             }
         }
     }

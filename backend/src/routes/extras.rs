@@ -1,21 +1,23 @@
 use crate::{
     error::AppError,
     models::{
-        BackupBudget, BackupGoal, BackupImportResponse, BackupIou, BackupPayload, BackupRule,
-        BackupTemplate, BackupTransaction, BackupWallet, BootstrapQuery, BudgetSuggestionItem,
-        BudgetSuggestionsResponse, BulkTransactionsRequest, BulkTransactionsResponse,
-        CategoryMomChange, CategorySpending, CreateDraftNotificationRequest, CreateTemplateRequest,
-        CreateWalletRequest, DashboardBootstrapResponse, DuplicatePair, DuplicateScanResponse,
-        ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery, GlobalSearchResponse,
-        ListTransactionsQuery, MerchantMonthPoint, MerchantProfileQuery, MerchantProfileResponse,
-        MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery, NetWorthPoint,
-        PaceComparison, QuickTemplateRecord, RangeSpendingQuery, RangeSpendingResponse,
-        Rule503020Response, SpendingAlertItem, SplitTransactionRequest, SubscriptionAuditItem,
-        SubscriptionAuditResponse, TagSpending, TopMerchantItem, TransactionRecord,
-        TransferWalletRequest, TransferWalletResponse, UpdatePreferencesRequest,
-        UpsertMerchantRuleRequest, UserPreferencesResponse, WalletRecord,
-        WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem, YearlyBiggestExpense,
-        YearlyMonthItem, YearlyWrappedQuery, YearlyWrappedResponse,
+        AnalyticsBundleQuery, BackupBudget, BackupGoal, BackupImportResponse, BackupIou,
+        BackupPayload, BackupRule, BackupTemplate, BackupTransaction, BackupWallet,
+        BootstrapQuery, BudgetSuggestionItem, BudgetSuggestionsResponse, BulkTransactionsRequest,
+        BulkTransactionsResponse, CategoryHistoryQuery, CategoryHistoryResponse,
+        CategoryMomChange, CategoryMonthPoint, CategorySpending, CreateDraftNotificationRequest,
+        CreateTemplateRequest, CreateWalletRequest, DashboardAnalyticsResponse,
+        DashboardBootstrapResponse, DuplicatePair, DuplicateScanResponse, EmergencyRunway,
+        FinancialHealthScore, ForecastAndHealthResponse, FxRatesResponse, GlobalSearchQuery,
+        GlobalSearchResponse, ListTransactionsQuery, MerchantMonthPoint, MerchantProfileQuery,
+        MerchantProfileResponse, MerchantRuleRecord, MonthlyComparisonResponse, MonthlyQuery,
+        NetWorthPoint, PaceComparison, QuickTemplateRecord, RangeSpendingQuery,
+        RangeSpendingResponse, Rule503020Response, SpendingAlertItem, SplitTransactionRequest,
+        SubscriptionAuditItem, SubscriptionAuditResponse, TagSpending, TopMerchantItem,
+        TransactionRecord, TransferWalletRequest, TransferWalletResponse, TrendQuery,
+        UpdatePreferencesRequest, UpsertMerchantRuleRequest, UserPreferencesResponse,
+        WalletRecord, WeekdayBreakdownResponse, WeekdayQuery, WeekdaySpendingItem,
+        YearlyBiggestExpense, YearlyMonthItem, YearlyWrappedQuery, YearlyWrappedResponse,
     },
     routes::AppState,
     services::{
@@ -3139,6 +3141,317 @@ pub async fn scan_duplicates(
     Ok(Json(DuplicateScanResponse {
         count: pairs.len(),
         pairs,
+    }))
+}
+
+// ================================
+// v2.0.0: Single-Request Analytics Bundle + Financial Health Score + Emergency Runway
+// ================================
+
+pub async fn dashboard_analytics(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<AnalyticsBundleQuery>,
+) -> Result<Json<DashboardAnalyticsResponse>, AppError> {
+    let year = params.year;
+    let month = params.month;
+    let wrapped_year = params.wrapped_year.unwrap_or(year);
+    let cur = state.config.default_currency.clone();
+
+    let (
+        Json(trend),
+        Json(recurring),
+        Json(categories),
+        Json(goals),
+        Json(ious),
+        Json(rules),
+        Json(tags),
+        Json(comparison),
+        Json(forecast),
+        Json(weekday),
+        Json(fx_rates),
+        Json(rule_50_30_20),
+        Json(yearly_wrapped),
+        Json(subscription_audit),
+        Json(budgets),
+        Json(wallets),
+    ) = tokio::try_join!(
+        crate::routes::transactions::spending_trend(
+            State(state.clone()),
+            auth.clone(),
+            Query(TrendQuery { months: Some(6) }),
+        ),
+        crate::routes::transactions::list_recurring(State(state.clone()), auth.clone()),
+        crate::routes::transactions::list_categories(State(state.clone()), auth.clone()),
+        crate::routes::insights::list_goals(State(state.clone()), auth.clone()),
+        crate::routes::insights::list_ious(State(state.clone()), auth.clone()),
+        list_rules(State(state.clone()), auth.clone()),
+        list_tags(State(state.clone()), auth.clone()),
+        monthly_comparison(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        spending_forecast(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        weekday_breakdown(
+            State(state.clone()),
+            auth.clone(),
+            Query(WeekdayQuery { months: Some(3) }),
+        ),
+        get_fx_rates(State(state.clone()), auth.clone()),
+        rule_50_30_20(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        yearly_wrapped(
+            State(state.clone()),
+            auth.clone(),
+            Query(YearlyWrappedQuery {
+                year: Some(wrapped_year),
+            }),
+        ),
+        subscription_audit(State(state.clone()), auth.clone()),
+        crate::routes::transactions::list_budgets(
+            State(state.clone()),
+            auth.clone(),
+            Query(MonthlyQuery { year, month }),
+        ),
+        list_wallets(State(state.clone()), auth.clone()),
+    )?;
+
+    // Financial Health Score (0-100): Savings (35) + Budgets (25) + 50/30/20 (20) + Consistency (20)
+    let savings_pts = match comparison.savings_rate_pct {
+        Some(r) if r >= 25.0 => 35,
+        Some(r) if r >= 15.0 => 28,
+        Some(r) if r >= 5.0 => 20,
+        Some(r) if r > 0.0 => 12,
+        Some(_) => 5,
+        None => 15,
+    };
+
+    let budget_pts = if budgets.is_empty() {
+        15
+    } else {
+        let ok_count = budgets
+            .iter()
+            .filter(|b| b.spent <= b.effective_limit)
+            .count();
+        ((ok_count as f64 / budgets.len() as f64) * 25.0).round() as i32
+    };
+
+    let rule_pts = {
+        let mut pts = 20;
+        if rule_50_30_20.needs_pct > 55.0 {
+            pts -= 7;
+        }
+        if rule_50_30_20.wants_pct > 35.0 {
+            pts -= 7;
+        }
+        if rule_50_30_20.savings_pct < 15.0 && rule_50_30_20.total_income > Decimal::ZERO {
+            pts -= 6;
+        }
+        pts.max(0)
+    };
+
+    let consistency_pts = {
+        let mut pts = 0;
+        if comparison.no_spend_days >= 10 {
+            pts += 12;
+        } else if comparison.no_spend_days >= 5 {
+            pts += 8;
+        } else {
+            pts += 4;
+        }
+        if forecast.current_running_balance >= Decimal::ZERO {
+            pts += 8;
+        }
+        pts.min(20)
+    };
+
+    let score = (savings_pts + budget_pts + rule_pts + consistency_pts).clamp(0, 100);
+    let grade = match score {
+        90..=100 => "A+",
+        80..=89 => "A",
+        70..=79 => "B+",
+        60..=69 => "B",
+        50..=59 => "C",
+        _ => "D",
+    }
+    .to_string();
+
+    let tip = if savings_pts < 20 {
+        "Boost your savings rate toward 20% to lift your score fastest.".to_string()
+    } else if budget_pts < 20 {
+        "Keep more categories under their monthly budget limit.".to_string()
+    } else if rule_pts < 14 {
+        "Trim discretionary Wants closer to 30% of income.".to_string()
+    } else {
+        "Strong financial discipline! Keep building your emergency runway.".to_string()
+    };
+
+    let health_score = FinancialHealthScore {
+        score,
+        grade,
+        tip,
+        savings_pts,
+        budget_pts,
+        rule_pts,
+        consistency_pts,
+    };
+
+    // Emergency Fund Runway: Liquid Wallets (cash, bank, ewallet) / trailing 3-month avg spend
+    let liquid_balance: Decimal = wallets
+        .iter()
+        .filter(|w| {
+            matches!(
+                w.wallet_type.to_lowercase().as_str(),
+                "cash" | "bank" | "ewallet" | "other"
+            )
+        })
+        .map(|w| w.current_balance)
+        .fold(Decimal::ZERO, |acc, v| acc + v)
+        .max(Decimal::ZERO);
+
+    let spend_months: Vec<Decimal> = trend
+        .iter()
+        .rev()
+        .take(3)
+        .map(|p| p.total_spent)
+        .filter(|v| *v > Decimal::ZERO)
+        .collect();
+    let avg_monthly_spend = if spend_months.is_empty() {
+        Decimal::ZERO
+    } else {
+        let sum: Decimal = spend_months.iter().copied().sum();
+        (sum / Decimal::from(spend_months.len() as i64)).round_dp(0)
+    };
+    let runway_months = if avg_monthly_spend > Decimal::ZERO {
+        let m = (liquid_balance / avg_monthly_spend)
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        (m * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
+
+    let emergency_runway = EmergencyRunway {
+        base_currency: cur,
+        liquid_balance,
+        avg_monthly_spend,
+        runway_months,
+        target_months: 6.0,
+    };
+
+    Ok(Json(DashboardAnalyticsResponse {
+        trend,
+        recurring,
+        categories,
+        goals,
+        ious,
+        rules,
+        tags,
+        comparison,
+        forecast,
+        weekday,
+        fx_rates,
+        rule_50_30_20,
+        yearly_wrapped,
+        subscription_audit,
+        health_score,
+        emergency_runway,
+    }))
+}
+
+// ================================
+// v2.0.0: 6-Month Category Trend Drilldown
+// ================================
+
+pub async fn category_history(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<CategoryHistoryQuery>,
+) -> Result<Json<CategoryHistoryResponse>, AppError> {
+    let cat_name = params.category.trim().to_string();
+    if cat_name.is_empty() {
+        return Err(AppError::BadRequest("category is required".to_string()));
+    }
+    let months = params.months.unwrap_or(6).clamp(3, 12);
+    let today = Utc::now().date_naive();
+    let mut cur_y = today.year();
+    let mut cur_m = today.month();
+    let mut slots: Vec<(i32, u32)> = Vec::with_capacity(months as usize);
+    for _ in 0..months {
+        slots.push((cur_y, cur_m));
+        if cur_m == 1 {
+            cur_y -= 1;
+            cur_m = 12;
+        } else {
+            cur_m -= 1;
+        }
+    }
+    slots.reverse();
+
+    let (first_y, first_m) = slots[0];
+    let start_date = NaiveDate::from_ymd_opt(first_y, first_m, 1)
+        .ok_or_else(|| AppError::BadRequest("Invalid date".to_string()))?;
+
+    let rows: Vec<(i32, i32, Decimal, i64)> = sqlx::query_as(
+        r#"
+        SELECT
+            EXTRACT(YEAR FROM t.tx_date)::INT AS y,
+            EXTRACT(MONTH FROM t.tx_date)::INT AS m,
+            COALESCE(SUM(COALESCE(t.base_amount, t.amount)), 0) AS total,
+            COUNT(*) AS cnt
+        FROM transactions t
+        LEFT JOIN categories c ON c.id = t.category_id
+        WHERE t.user_id = $1
+          AND t.status = 'confirmed'
+          AND t.is_transfer = FALSE
+          AND t.tx_type = 'debit'
+          AND LOWER(COALESCE(c.name, 'Uncategorized')) = LOWER($2)
+          AND t.tx_date >= $3
+        GROUP BY 1, 2
+        "#,
+    )
+    .bind(auth.user_id)
+    .bind(&cat_name)
+    .bind(start_date)
+    .fetch_all(&state.db)
+    .await?;
+
+    let month_labels = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut total_spent = Decimal::ZERO;
+    let mut points = Vec::with_capacity(slots.len());
+    for (y, m) in slots {
+        let found = rows.iter().find(|r| r.0 == y && r.1 == m as i32);
+        let amt = found.map(|r| r.2).unwrap_or(Decimal::ZERO);
+        let cnt = found.map(|r| r.3).unwrap_or(0);
+        total_spent += amt;
+        points.push(CategoryMonthPoint {
+            year: y,
+            month: m,
+            label: month_labels[(m - 1) as usize].to_string(),
+            total_spent: amt,
+            tx_count: cnt,
+        });
+    }
+    let avg_monthly = (total_spent / Decimal::from(months)).round_dp(0);
+
+    Ok(Json(CategoryHistoryResponse {
+        category_name: cat_name,
+        base_currency: state.config.default_currency.clone(),
+        months,
+        total_spent,
+        avg_monthly,
+        points,
     }))
 }
 

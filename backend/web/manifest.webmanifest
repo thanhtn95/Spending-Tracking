@@ -1,0 +1,17 @@
+{
+  "name": "Spending Tracker",
+  "short_name": "Spending",
+  "description": "AI-powered personal spending ledger",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F7F7F5",
+  "theme_color": "#0D5C4B",
+  "icons": [
+    {
+      "src": "/assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

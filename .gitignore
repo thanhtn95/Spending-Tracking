@@ -1,0 +1,23 @@
+# Environment secrets (never commit)
+.env
+.env.local
+backend/.env
+
+# Rust
+/backend/target/
+**/*.rs.bk
+
+# Android / Gradle
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+*.keystore
+*.jks
+*.apk
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

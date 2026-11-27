@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spending Tracker — Personal Ledger</title>
+  <meta name="theme-color" content="#0D5C4B" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="icon" type="image/svg+xml" href="/assets/icon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <!-- Auth View -->
+  <main id="auth-view" class="auth-shell hidden">
+    <section class="auth-card">
+      <div class="brand auth-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/></svg>
+        </span>
+        <h1>Spending Tracker</h1>
+      </div>
+      <p class="subtitle">Calm, AI-assisted personal expense ledger.</p>
+
+      <div class="segmented" role="tablist">
+        <button id="tab-login" class="seg-btn active" type="button" role="tab">Sign In</button>
+        <button id="tab-register" class="seg-btn" type="button" role="tab">Register</button>
+      </div>
+
+      <form id="auth-form">
+        <div id="register-name-group" class="field hidden">
+          <label for="auth-name">Display Name</label>
+          <input id="auth-name" type="text" placeholder="Optional" autocomplete="name" />
+        </div>
+        <div class="field">
+          <label for="auth-email">Email</label>
+          <input id="auth-email" type="email" required placeholder="you@example.com" autocomplete="email" />
+        </div>
+        <div class="field">
+          <label for="auth-password">Password</label>
+          <input id="auth-password" type="password" required minlength="8" placeholder="At least 8 characters" autocomplete="current-password" />
+        </div>
+        <div id="auth-error" class="banner banner-error hidden"></div>
+        <button id="auth-submit" class="btn btn-primary btn-full" type="submit">Sign In</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- Dashboard View -->
+  <div id="app-view" class="hidden">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/></svg>
+          </span>
+          <span class="brand-title">Spending Tracker</span>
+        </div>
+        <div class="topbar-right">
+          <button id="btn-privacy-toggle" class="btn btn-ghost btn-sm" type="button" title="Hide/show amounts">👁 Hide</button>
+          <button id="btn-theme-toggle" class="btn btn-ghost btn-sm" type="button" title="Toggle light/dark theme">Theme</button>
+          <button id="btn-open-add" class="btn btn-primary btn-sm" type="button">+ Add</button>
+          <span id="user-email" class="user-chip"></span>
+          <button id="btn-logout" class="btn btn-ghost btn-sm" type="button">Sign Out</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+      <!-- Pending Drafts Banner -->
+      <div id="pending-banner" class="pending-banner hidden">
+        <span id="pending-banner-text">You have unreviewed draft transactions.</span>
+        <button id="btn-review-pending" class="btn btn-sm btn-primary" type="button">Review Pending</button>
+      </div>
+
+      <!-- Summary Header -->
+      <section class="summary-strip">
+        <div class="summary-left">
+          <div class="eyebrow-row">
+            <span class="eyebrow">Running Balance (incl. carryover)</span>
+            <span id="debt-badge" class="pill pill-ok">Balanced</span>
+            <button id="btn-zero-balance" class="btn-zero-pill" type="button" title="Insert a reversible balancing entry to reset running balance to 0">Zero Out Balance</button>
+          </div>
+          <div class="hero-total mono" id="net-balance">0</div>
+          <div class="kpi-pills">
+            <div class="kpi-mini">
+              <span class="kpi-label">From Prev Months</span>
+              <span class="kpi-val mono" id="carry-forward">0</span>
+            </div>
+            <div class="kpi-mini">
+              <span class="kpi-label">This Month Net</span>
+              <span class="kpi-val mono" id="month-net">0</span>
+            </div>
+            <div class="kpi-mini">
+              <span class="kpi-label">Debit (Spent)</span>
+              <span class="kpi-val mono text-debit" id="total-spent">0</span>
+            </div>
+            <div class="kpi-mini">
+              <span class="kpi-label">Credit (Inflow)</span>
+              <span class="kpi-val mono text-credit" id="total-credit">0</span>
+            </div>
+            <div class="kpi-mini">
+              <span class="kpi-label">Confirmed</span>
+              <span class="kpi-val mono" id="tx-count">0 tx</span>
+            </div>
+          </div>
+        </div>
+        <div class="month-stepper" aria-label="Select month">
+          <button id="btn-prev-month" class="stepper-btn" type="button" title="Previous month" aria-label="Previous month">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          </button>
+          <span id="current-month-label" class="stepper-label">—</span>
+          <button id="btn-next-month" class="stepper-btn" type="button" title="Next month" aria-label="Next month">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+        </div>
+      </section>
+
+      <!-- Section Navigation Tabs -->
+      <nav class="nav-tabs" role="tablist" aria-label="Dashboard sections">
+        <button class="nav-tab active" data-web-tab="overview" type="button" role="tab">Overview</button>
+        <button class="nav-tab" data-web-tab="ledger" type="button" role="tab">Ledger</button>
+        <button class="nav-tab" data-web-tab="planning" type="button" role="tab">Planning</button>
+        <button class="nav-tab" data-web-tab="tools" type="button" role="tab">Tools</button>
+      </nav>
+
+      <!-- TAB: OVERVIEW -->
+      <div data-tab-panel="overview">
+      <!-- Quick-Add Templates Strip -->
+      <section class="quick-strip" aria-label="Quick-add templates">
+        <span class="muted" style="font-size:0.8rem;font-weight:600;">Quick Add:</span>
+        <div id="template-list" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;"></div>
+        <button id="btn-new-template" class="btn btn-ghost btn-sm" type="button">+ Template</button>
+      </section>
+
+      <!-- Wallets & Internal Transfers -->
+      <section class="card" style="margin-bottom:20px;">
+        <div class="section-head">
+          <h2>Wallets &amp; Accounts</h2>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="wallets-total" class="badge-subtle mono">Total: 0</span>
+            <button id="btn-toggle-transfer" class="btn btn-ghost btn-sm" type="button">Transfer</button>
+          </div>
+        </div>
+        <div id="wallet-list" class="wallet-grid">
+          <div class="empty-block">No wallets yet. Add Cash, Bank, Credit Card, or E-Wallet below.</div>
+        </div>
+        <form id="wallet-form" class="inline-form-4">
+          <input id="wallet-name" type="text" required placeholder="Wallet name (e.g. Cash, VCB)" />
+          <select id="wallet-type">
+            <option value="cash">Cash</option>
+            <option value="bank">Bank</option>
+            <option value="credit_card">Credit Card</option>
+            <option value="ewallet">E-Wallet</option>
+            <option value="other">Other</option>
+          </select>
+          <input id="wallet-initial" class="mono" type="number" step="1000" value="0" placeholder="Starting balance" />
+          <button class="btn btn-ghost btn-sm" type="submit">+ Wallet</button>
+        </form>
+        <form id="transfer-form" class="inline-form-4 hidden" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+          <select id="transfer-from" aria-label="From wallet"></select>
+          <select id="transfer-to" aria-label="To wallet"></select>
+          <input id="transfer-amount" class="mono" type="number" step="1000" min="1" required placeholder="Transfer amount" />
+          <button class="btn btn-primary btn-sm" type="submit">Move</button>
+        </form>
+      </section>
+
+      <div class="grid-main">
+        <!-- Upload Studio -->
+        <section class="card">
+          <div class="section-head">
+            <h2>Import Documents</h2>
+            <span class="badge-subtle">Gemini AI</span>
+          </div>
+          <p class="muted" style="margin-bottom: 14px;">
+            Drop receipts, banking screenshots, or PDF/CSV statements. Images auto-resize to 1600px JPEG before upload.
+          </p>
+
+          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose files to upload">
+            <input id="file-input" type="file" multiple accept="image/*,.pdf,.csv,application/pdf,text/csv" class="hidden" />
+            <div class="dropzone-icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="17 8 12 3 7 8"/>
+                <line x1="12" y1="3" x2="12" y2="15"/>
+              </svg>
+            </div>
+            <div class="dropzone-title">Drop files or click to browse</div>
+            <div id="selected-files-label" class="dropzone-sub">JPG, PNG, PDF (encrypted supported), CSV</div>
+          </div>
+
+          <div class="upload-controls">
+            <div class="field">
+              <label for="source-type">Document Type</label>
+              <select id="source-type">
+                <option value="">Auto-detect</option>
+                <option value="bill_image">Paper Bill / Receipt</option>
+                <option value="screenshot">Banking Screenshot</option>
+                <option value="bank_statement_pdf">Bank Statement (PDF)</option>
+                <option value="bank_statement_csv">Bank Statement (CSV)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pdf-password">PDF Password</label>
+              <input id="pdf-password" type="password" placeholder="Optional" />
+            </div>
+          </div>
+
+          <button id="btn-upload" class="btn btn-primary btn-full" type="button" disabled>
+            Extract Transactions
+          </button>
+        </section>
+
+        <!-- Category Breakdown -->
+        <section class="card">
+          <div class="section-head">
+            <h2>Category Breakdown</h2>
+            <span class="muted">Confirmed Debits</span>
+          </div>
+          <div id="category-list" class="category-list">
+            <div class="empty-block">No confirmed spending for this month yet.</div>
+          </div>
+        </section>
+      </div>
+      </div>
+
+      <!-- TAB: PLANNING -->
+      <div data-tab-panel="planning" class="hidden">
+      <!-- Analytics Row: 6-Month Cash Flow Trend + Monthly Budgets -->
+      <div class="grid-main">
+        <section class="card">
+          <div class="section-head">
+            <h2>6-Month Cash Flow</h2>
+            <div class="legend-row">
+              <span class="legend-item"><span class="cat-dot" style="background:var(--accent)"></span>Credit</span>
+              <span class="legend-item"><span class="cat-dot" style="background:var(--muted)"></span>Debit</span>
+            </div>
+          </div>
+          <div id="trend-chart" class="trend-chart">
+            <div class="empty-block">Loading cash flow trend...</div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>Monthly Budgets</h2>
+            <span id="budget-pacing" class="muted"></span>
+          </div>
+          <div id="budget-list" class="category-list">
+            <div class="empty-block">No category budgets set yet.</div>
+          </div>
+          <form id="budget-form" class="budget-form">
+            <select id="budget-category" aria-label="Budget category"></select>
+            <input id="budget-limit" class="mono" type="number" step="1000" min="1" required placeholder="Monthly limit" />
+            <button class="btn btn-ghost btn-sm" type="submit">Set</button>
+          </form>
+          <div style="margin-top:10px;display:flex;justify-content:flex-end;">
+            <button id="btn-new-category" class="btn btn-ghost btn-sm" type="button">+ New Category</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Recurring Bills & Subscriptions Radar -->
+      <section class="card">
+        <div class="section-head">
+          <h2>Recurring Bills &amp; Subscriptions</h2>
+          <span id="recurring-total" class="badge-subtle mono">Fixed: 0 / mo</span>
+        </div>
+        <div id="recurring-list" class="recurring-grid">
+          <div class="empty-block">No recurring bills detected yet. Mark any transaction as recurring or upload 2+ months of statements.</div>
+        </div>
+      </section>
+
+      <!-- AI Monthly Coach -->
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>AI Monthly Coach</h2>
+            <span class="muted">1 free Flash-Lite request comparing this month vs last month</span>
+          </div>
+          <button id="btn-gen-insights" class="btn btn-primary btn-sm" type="button">Generate Insights</button>
+        </div>
+        <div id="insights-body" class="insights-list">
+          <div class="empty-block">Click "Generate Insights" for 3 tailored tips on your spending and debt payoff pace.</div>
+        </div>
+      </section>
+
+      <!-- Goals & Split/IOU Row -->
+      <div class="grid-main">
+        <section class="card">
+          <div class="section-head">
+            <h2>Goals &amp; Debt Payoff</h2>
+            <span class="muted">Savings &amp; Payoff Pots</span>
+          </div>
+          <div id="goals-list" class="category-list">
+            <div class="empty-block">No goals yet. Add a savings or debt payoff target below.</div>
+          </div>
+          <form id="goal-form" class="inline-form-4">
+            <input id="goal-name" type="text" required placeholder="e.g. Pay off card" />
+            <select id="goal-type">
+              <option value="debt_payoff">Debt Payoff</option>
+              <option value="savings">Savings</option>
+            </select>
+            <input id="goal-target" class="mono" type="number" min="1" required placeholder="Target" />
+            <button class="btn btn-ghost btn-sm" type="submit">Add</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>Split &amp; IOUs</h2>
+            <span id="iou-summary" class="badge-subtle mono">Owed to me: 0</span>
+          </div>
+          <div id="iou-list" class="category-list">
+            <div class="empty-block">No active IOUs. Track money lent to friends or owed to others below.</div>
+          </div>
+          <form id="iou-form" class="inline-form-4">
+            <input id="iou-person" type="text" required placeholder="Person name" />
+            <select id="iou-direction">
+              <option value="owed_to_me">Owes Me</option>
+              <option value="i_owe">I Owe</option>
+            </select>
+            <input id="iou-amount" class="mono" type="number" min="1" required placeholder="Amount" />
+            <button class="btn btn-ghost btn-sm" type="submit">Add</button>
+          </form>
+        </section>
+      </div>
+      </div>
+
+      <!-- TAB: TOOLS -->
+      <div data-tab-panel="tools" class="hidden">
+      <!-- Merchant Rules & JSON Backup Row -->
+      <div class="grid-main">
+        <section class="card">
+          <div class="section-head">
+            <h2>Auto-Categorization Rules</h2>
+            <span class="muted">Merchant → Category</span>
+          </div>
+          <div id="rules-list" class="category-list">
+            <div class="empty-block">No rules yet. Confirming or editing transactions learns automatically, or add one below.</div>
+          </div>
+          <form id="rule-form" class="budget-form">
+            <input id="rule-pattern" type="text" required placeholder="Merchant (e.g. Grab)" />
+            <select id="rule-category" aria-label="Rule category"></select>
+            <button class="btn btn-ghost btn-sm" type="submit">Save</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <div class="section-head">
+            <h2>Backup &amp; Restore</h2>
+            <span class="badge-subtle">100% Portable JSON</span>
+          </div>
+          <p class="muted" style="margin-bottom:14px;">
+            Download a complete snapshot of your transactions, wallets, templates, budgets, rules, goals, and IOUs — or restore from a previous backup file.
+          </p>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <button id="btn-backup-export" class="btn btn-primary btn-sm" type="button">Export JSON Backup</button>
+            <button id="btn-backup-import" class="btn btn-ghost btn-sm" type="button">Import JSON Backup</button>
+            <input id="backup-file-input" type="file" accept="application/json,.json" class="hidden" />
+          </div>
+        </section>
+      </div>
+      </div>
+
+      <!-- TAB: LEDGER -->
+      <div data-tab-panel="ledger" class="hidden">
+      <!-- Transactions Ledger -->
+      <section class="card card-ledger">
+        <div class="ledger-header">
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+            <h2>Ledger</h2>
+            <div class="type-pills" role="group" aria-label="Filter by type">
+              <button class="type-pill active" data-type-filter="all" type="button">All</button>
+              <button class="type-pill" data-type-filter="debit" type="button">Debits</button>
+              <button class="type-pill" data-type-filter="credit" type="button">Credits</button>
+            </div>
+          </div>
+          <div class="table-filters">
+            <input id="tx-search" class="search-input" type="search" placeholder="Filter vendor, category, #tag..." />
+            <select id="tx-category-filter" aria-label="Filter by category">
+              <option value="all">All Categories</option>
+            </select>
+            <select id="tx-wallet-filter" aria-label="Filter by wallet">
+              <option value="all">All Wallets</option>
+            </select>
+            <select id="tx-tag-filter" aria-label="Filter by tag">
+              <option value="all">All Tags</option>
+            </select>
+            <select id="tx-status-filter" aria-label="Filter by status">
+              <option value="confirmed">Confirmed</option>
+              <option value="draft">Drafts</option>
+              <option value="duplicate_flagged">Flagged Duplicates</option>
+              <option value="all">All Statuses</option>
+            </select>
+            <button id="btn-toggle-range" class="btn btn-ghost btn-sm" type="button">Date Range / YTD</button>
+            <button id="btn-export-csv" class="btn btn-ghost btn-sm" type="button">Export CSV</button>
+          </div>
+        </div>
+
+        <!-- Custom Date Range / YTD Strip -->
+        <div id="range-bar" class="range-bar hidden">
+          <input id="range-start" class="mono" type="date" aria-label="Start date" />
+          <span class="muted">to</span>
+          <input id="range-end" class="mono" type="date" aria-label="End date" />
+          <button id="btn-range-apply" class="btn btn-primary btn-sm" type="button">Apply</button>
+          <button id="btn-range-ytd" class="btn btn-ghost btn-sm" type="button">YTD</button>
+          <button id="btn-range-30d" class="btn btn-ghost btn-sm" type="button">Last 30d</button>
+          <button id="btn-range-clear" class="btn btn-ghost btn-sm" type="button">Back to Month</button>
+          <span id="range-summary" class="badge-subtle mono" style="margin-left:auto;"></span>
+        </div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Merchant</th>
+                <th>Category</th>
+                <th>Source</th>
+                <th>Status</th>
+                <th class="num">Amount</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="tx-tbody">
+              <tr><td colspan="7" class="empty-cell">Loading ledger...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+    </main>
+  </div>
+
+  <!-- Quick Add / Edit Transaction Modal -->
+  <div id="add-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="add-modal-title">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3 id="add-modal-title">Add Transaction</h3>
+        <button id="btn-close-add" class="btn btn-ghost btn-sm" type="button" aria-label="Close">&times;</button>
+      </div>
+      <form id="add-form">
+        <input id="edit-tx-id" type="hidden" value="" />
+        <div class="upload-controls">
+          <div class="field">
+            <label for="add-type">Type</label>
+            <select id="add-type">
+              <option value="debit">Debit (Spent)</option>
+              <option value="credit">Credit (Inflow)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="add-date">Date</label>
+            <input id="add-date" class="mono" type="date" required />
+          </div>
+        </div>
+        <div class="field">
+          <label for="add-vendor">Merchant / Source</label>
+          <input id="add-vendor" type="text" required placeholder="e.g. Highlands Coffee or Salary" />
+        </div>
+        <div class="upload-controls">
+          <div class="field">
+            <label for="add-amount">Amount</label>
+            <input id="add-amount" class="mono" type="number" step="0.01" min="0.01" required placeholder="50000" />
+          </div>
+          <div class="field">
+            <label for="add-currency">Currency</label>
+            <select id="add-currency">
+              <option value="VND">VND</option>
+              <option value="USD">USD</option>
+              <option value="EUR">EUR</option>
+              <option value="SGD">SGD</option>
+              <option value="GBP">GBP</option>
+              <option value="JPY">JPY</option>
+            </select>
+          </div>
+        </div>
+        <div class="upload-controls">
+          <div class="field">
+            <label for="add-category">Category</label>
+            <select id="add-category"></select>
+          </div>
+          <div class="field">
+            <label for="add-wallet">Wallet (optional)</label>
+            <select id="add-wallet">
+              <option value="">None</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="add-tags">Tags (comma-separated, optional)</label>
+          <input id="add-tags" type="text" placeholder="e.g. trip, work, coffee" />
+        </div>
+        <div class="field">
+          <label for="add-desc">Note (optional)</label>
+          <input id="add-desc" type="text" placeholder="Optional details" />
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:0.86rem;cursor:pointer;margin-bottom:6px;">
+          <input id="add-recurring" type="checkbox" style="width:auto;" />
+          Recurring monthly bill / subscription
+        </label>
+        <div class="modal-footer" style="justify-content:space-between;">
+          <div style="display:flex;gap:8px;">
+            <button id="btn-delete-in-modal" class="btn btn-danger-ghost hidden" type="button">Delete</button>
+            <button id="btn-duplicate-in-modal" class="btn btn-ghost btn-sm hidden" type="button">Duplicate</button>
+          </div>
+          <div style="display:flex;gap:10px;margin-left:auto;">
+            <button id="btn-cancel-add" class="btn btn-ghost" type="button">Cancel</button>
+            <button id="btn-submit-add" class="btn btn-primary" type="submit">Save</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Draft Confirmation Modal -->
+  <div id="draft-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="draft-modal-title">
+    <div class="modal modal-lg">
+      <div class="modal-header">
+        <div>
+          <h3 id="draft-modal-title">Review Extracted Transactions</h3>
+          <div id="draft-meta" class="muted"></div>
+        </div>
+        <button id="btn-close-draft" class="btn btn-ghost btn-sm" type="button" aria-label="Close">&times;</button>
+      </div>
+
+      <div id="reconciliation-banner" class="banner hidden"></div>
+      <div id="skipped-banner" class="muted hidden" style="margin-bottom: 10px;"></div>
+
+      <div id="draft-items" class="draft-items"></div>
+
+      <div class="modal-footer">
+        <button id="btn-cancel-draft" class="btn btn-ghost" type="button">Review Later</button>
+        <button id="btn-confirm-draft" class="btn btn-primary" type="button">Confirm Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PDF Password Prompt Modal -->
+  <div id="pwd-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="pwd-modal-title">
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <h3 id="pwd-modal-title">PDF Password Required</h3>
+      </div>
+      <p class="muted" style="margin-bottom: 14px;">
+        This statement PDF is encrypted. Your password is used in memory only and never stored.
+      </p>
+      <div class="field">
+        <label for="modal-pdf-password">Password</label>
+        <input id="modal-pdf-password" type="password" placeholder="Enter PDF password" />
+      </div>
+      <div class="modal-footer">
+        <button id="btn-pwd-cancel" class="btn btn-ghost" type="button">Cancel</button>
+        <button id="btn-pwd-submit" class="btn btn-primary" type="button">Unlock &amp; Extract</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

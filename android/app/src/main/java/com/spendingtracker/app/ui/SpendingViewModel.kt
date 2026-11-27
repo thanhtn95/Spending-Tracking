@@ -1,0 +1,968 @@
+package com.spendingtracker.app.ui
+
+import android.app.Application
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.spendingtracker.app.data.ApiClient
+import com.spendingtracker.app.data.BudgetRecord
+import com.spendingtracker.app.data.ConfirmTransactionItem
+import com.spendingtracker.app.data.ConfirmTransactionsRequest
+import com.spendingtracker.app.data.CreateCategoryRequest
+import com.spendingtracker.app.data.CreateGoalRequest
+import com.spendingtracker.app.data.CreateIouRequest
+import com.spendingtracker.app.data.CreateTemplateRequest
+import com.spendingtracker.app.data.CreateTransactionRequest
+import com.spendingtracker.app.data.CreateWalletRequest
+import com.spendingtracker.app.data.DraftTransactionPreview
+import com.spendingtracker.app.data.GoalRecord
+import com.spendingtracker.app.data.IngestResponse
+import com.spendingtracker.app.data.IouRecord
+import com.spendingtracker.app.data.LoginRequest
+import com.spendingtracker.app.data.MediaUtils
+import com.spendingtracker.app.data.MerchantRuleRecord
+import com.spendingtracker.app.data.MonthlySpendingResponse
+import com.spendingtracker.app.data.MonthlyTrendPoint
+import com.spendingtracker.app.data.OfflineQueue
+import com.spendingtracker.app.data.QuickTemplateRecord
+import com.spendingtracker.app.data.RangeSpendingResponse
+import com.spendingtracker.app.data.RecurringSummaryResponse
+import com.spendingtracker.app.data.RegisterRequest
+import com.spendingtracker.app.data.TagSpending
+import com.spendingtracker.app.data.TokenStore
+import com.spendingtracker.app.data.TransactionRecord
+import com.spendingtracker.app.data.TransferWalletRequest
+import com.spendingtracker.app.data.UpdateGoalRequest
+import com.spendingtracker.app.data.UpdateTransactionRequest
+import com.spendingtracker.app.data.UpsertBudgetRequest
+import com.spendingtracker.app.data.UpsertMerchantRuleRequest
+import com.spendingtracker.app.data.WalletRecord
+import com.spendingtracker.app.data.ZeroBalanceRequest
+import com.spendingtracker.app.widget.SpendingWidgetProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
+import java.time.YearMonth
+
+data class PendingMediaUpload(
+    val uris: List<Uri>,
+    val sourceType: String?
+)
+
+data class UiState(
+    val isAuthenticated: Boolean = false,
+    val biometricEnabled: Boolean = false,
+    val themeMode: String = "system",
+    val privacyMode: Boolean = false,
+    val userEmail: String? = null,
+    val isLoading: Boolean = false,
+    val isUploading: Boolean = false,
+    val selectedMonth: YearMonth = YearMonth.now(),
+    val rangeStart: String? = null,
+    val rangeEnd: String? = null,
+    val rangeSummary: RangeSpendingResponse? = null,
+    val monthlySpending: MonthlySpendingResponse? = null,
+    val transactions: List<TransactionRecord> = emptyList(),
+    val wallets: List<WalletRecord> = emptyList(),
+    val templates: List<QuickTemplateRecord> = emptyList(),
+    val rules: List<MerchantRuleRecord> = emptyList(),
+    val tags: List<TagSpending> = emptyList(),
+    val budgets: List<BudgetRecord> = emptyList(),
+    val trend: List<MonthlyTrendPoint> = emptyList(),
+    val recurring: RecurringSummaryResponse? = null,
+    val goals: List<GoalRecord> = emptyList(),
+    val ious: List<IouRecord> = emptyList(),
+    val insightsTips: List<String> = emptyList(),
+    val isLoadingInsights: Boolean = false,
+    val categories: List<String> = DEFAULT_CATEGORY_NAMES,
+    val offlineQueueCount: Int = 0,
+    val pendingDraft: IngestResponse? = null,
+    val pendingPasswordPrompt: PendingMediaUpload? = null,
+    val errorMessage: String? = null,
+    val statusMessage: String? = null
+)
+
+val DEFAULT_CATEGORY_NAMES = listOf(
+    "Debt Repayment", "Dining", "Education", "Entertainment", "Family & Kids",
+    "Fees & Interest", "Gifts & Donations", "Groceries", "Health", "Housing",
+    "Income", "Insurance", "Investments", "Personal Care", "Refund", "Salary",
+    "Shopping", "Subscriptions", "Transfer", "Transport", "Travel", "Utilities",
+    "Uncategorized"
+)
+
+class SpendingViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val tokenStore = TokenStore(application.applicationContext)
+    private val offlineQueue = OfflineQueue(application.applicationContext)
+    private val api = ApiClient.create(tokenStore)
+
+    private val _uiState = MutableStateFlow(
+        UiState(
+            isAuthenticated = !tokenStore.getToken().isNullOrBlank(),
+            biometricEnabled = tokenStore.isBiometricEnabled(),
+            themeMode = tokenStore.getThemeMode(),
+            privacyMode = tokenStore.isPrivacyMode(),
+            userEmail = tokenStore.getEmail(),
+            offlineQueueCount = offlineQueue.count()
+        )
+    )
+    val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private var queuedShareUpload: PendingMediaUpload? = null
+
+    init {
+        if (_uiState.value.isAuthenticated) {
+            refreshDashboard()
+        }
+    }
+
+    fun clearMessages() {
+        _uiState.update { it.copy(errorMessage = null, statusMessage = null) }
+    }
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        tokenStore.setBiometricEnabled(enabled)
+        _uiState.update {
+            it.copy(
+                biometricEnabled = enabled,
+                statusMessage = if (enabled) "Biometric lock enabled" else "Biometric lock disabled"
+            )
+        }
+    }
+
+    fun cycleThemeMode() {
+        val next = when (_uiState.value.themeMode) {
+            "system" -> "light"
+            "light" -> "dark"
+            else -> "system"
+        }
+        tokenStore.setThemeMode(next)
+        _uiState.update {
+            it.copy(themeMode = next, statusMessage = "Theme: ${next.replaceFirstChar { c -> c.uppercase() }}")
+        }
+    }
+
+    fun togglePrivacyMode() {
+        val next = !_uiState.value.privacyMode
+        tokenStore.setPrivacyMode(next)
+        _uiState.update {
+            it.copy(privacyMode = next, statusMessage = if (next) "Amounts hidden" else "Amounts visible")
+        }
+    }
+
+    fun login(email: String, password: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.login(LoginRequest(email.trim(), password))
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    tokenStore.saveSession(body.accessToken, body.user.email)
+                    _uiState.update {
+                        it.copy(
+                            isAuthenticated = true,
+                            userEmail = body.user.email,
+                            isLoading = false
+                        )
+                    }
+                    refreshDashboard()
+                    flushQueuedUpload()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Network error")
+                }
+            }
+        }
+    }
+
+    fun register(email: String, password: String, displayName: String?) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.register(
+                    RegisterRequest(
+                        email = email.trim(),
+                        password = password,
+                        displayName = displayName?.trim()?.takeIf { it.isNotEmpty() }
+                    )
+                )
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    tokenStore.saveSession(body.accessToken, body.user.email)
+                    _uiState.update {
+                        it.copy(
+                            isAuthenticated = true,
+                            userEmail = body.user.email,
+                            isLoading = false
+                        )
+                    }
+                    refreshDashboard()
+                    flushQueuedUpload()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Network error")
+                }
+            }
+        }
+    }
+
+    fun logout() {
+        tokenStore.clear()
+        queuedShareUpload = null
+        _uiState.value = UiState(isAuthenticated = false, offlineQueueCount = offlineQueue.count())
+    }
+
+    fun previousMonth() {
+        _uiState.update { it.copy(selectedMonth = it.selectedMonth.minusMonths(1)) }
+        refreshDashboard()
+    }
+
+    fun nextMonth() {
+        _uiState.update { it.copy(selectedMonth = it.selectedMonth.plusMonths(1)) }
+        refreshDashboard()
+    }
+
+    fun refreshDashboard() {
+        if (!_uiState.value.isAuthenticated) return
+        val ym = _uiState.value.selectedMonth
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val summaryRes = api.getMonthlySpending(ym.year, ym.monthValue)
+                val rStart = _uiState.value.rangeStart
+                val rEnd = _uiState.value.rangeEnd
+                val txRes = if (rStart != null && rEnd != null) {
+                    api.getTransactions(startDate = rStart, endDate = rEnd, status = "confirmed")
+                } else {
+                    api.getTransactions(year = ym.year, month = ym.monthValue, status = "confirmed")
+                }
+                val rangeRes = if (rStart != null && rEnd != null) {
+                    api.getRangeSpending(rStart, rEnd)
+                } else null
+                val budgetsRes = api.getBudgets(ym.year, ym.monthValue)
+                val trendRes = api.getSpendingTrend(6)
+                val recurringRes = api.getRecurring()
+                val catsRes = api.getCategories()
+                val goalsRes = api.getGoals()
+                val iousRes = api.getIous()
+                val walletsRes = api.getWallets()
+                val templatesRes = api.getTemplates()
+                val rulesRes = api.getRules()
+                val tagsRes = api.getTags()
+
+                if (summaryRes.code() == 401 || txRes.code() == 401) {
+                    logout()
+                    _uiState.update { it.copy(errorMessage = "Session expired. Please sign in again.") }
+                    return@launch
+                }
+
+                if (summaryRes.isSuccessful && txRes.isSuccessful) {
+                    val summaryBody = summaryRes.body()
+                    if (summaryBody != null) {
+                        tokenStore.saveWidgetSnapshot(
+                            balance = summaryBody.cumulativeBalance,
+                            monthSpent = summaryBody.totalSpent,
+                            currency = summaryBody.baseCurrency
+                        )
+                        SpendingWidgetProvider.notifyDataChanged(getApplication<Application>().applicationContext)
+                    }
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            monthlySpending = summaryBody,
+                            rangeSummary = if (rangeRes?.isSuccessful == true) rangeRes.body() else null,
+                            transactions = txRes.body().orEmpty(),
+                            wallets = if (walletsRes.isSuccessful) walletsRes.body().orEmpty() else it.wallets,
+                            templates = if (templatesRes.isSuccessful) templatesRes.body().orEmpty() else it.templates,
+                            rules = if (rulesRes.isSuccessful) rulesRes.body().orEmpty() else it.rules,
+                            tags = if (tagsRes.isSuccessful) tagsRes.body().orEmpty() else it.tags,
+                            budgets = if (budgetsRes.isSuccessful) budgetsRes.body().orEmpty() else it.budgets,
+                            trend = if (trendRes.isSuccessful) trendRes.body().orEmpty() else it.trend,
+                            recurring = if (recurringRes.isSuccessful) recurringRes.body() else it.recurring,
+                            goals = if (goalsRes.isSuccessful) goalsRes.body().orEmpty() else it.goals,
+                            ious = if (iousRes.isSuccessful) iousRes.body().orEmpty() else it.ious,
+                            categories = if (catsRes.isSuccessful && !catsRes.body().isNullOrEmpty()) {
+                                catsRes.body()!!.map { c -> c.name }
+                            } else it.categories,
+                            offlineQueueCount = offlineQueue.count()
+                        )
+                    }
+                    // Try flushing offline receipts quietly if any are queued
+                    if (offlineQueue.count() > 0) {
+                        flushOfflineQueue()
+                    }
+                } else {
+                    val msg = if (!summaryRes.isSuccessful) {
+                        ApiClient.parseErrorMessage(summaryRes)
+                    } else {
+                        ApiClient.parseErrorMessage(txRes)
+                    }
+                    _uiState.update { it.copy(isLoading = false, errorMessage = msg) }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        offlineQueueCount = offlineQueue.count(),
+                        errorMessage = e.localizedMessage ?: "Failed to load data"
+                    )
+                }
+            }
+        }
+    }
+
+    fun uploadMedia(uris: List<Uri>, sourceType: String? = null, pdfPassword: String? = null) {
+        if (uris.isEmpty()) return
+
+        if (!_uiState.value.isAuthenticated) {
+            queuedShareUpload = PendingMediaUpload(uris, sourceType)
+            _uiState.update {
+                it.copy(statusMessage = "Sign in to finish importing your shared file(s).")
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    isUploading = true,
+                    errorMessage = null,
+                    pendingPasswordPrompt = null
+                )
+            }
+            try {
+                val ctx = getApplication<Application>().applicationContext
+                val parts = withContext(Dispatchers.IO) {
+                    MediaUtils.urisToMultipartParts(ctx, uris)
+                }
+                if (parts.isEmpty()) {
+                    _uiState.update {
+                        it.copy(isUploading = false, errorMessage = "Could not read selected file(s).")
+                    }
+                    return@launch
+                }
+
+                val textMedia = "text/plain".toMediaType()
+                val pwdBody = pdfPassword?.takeIf { it.isNotBlank() }?.toRequestBody(textMedia)
+                val sourceBody = sourceType?.takeIf { it.isNotBlank() }?.toRequestBody(textMedia)
+
+                val res = api.ingestMedia(parts, pwdBody, sourceBody)
+                if (res.code() == 401) {
+                    logout()
+                    _uiState.update { it.copy(errorMessage = "Session expired. Please sign in again.") }
+                    return@launch
+                }
+
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update {
+                        it.copy(isUploading = false, pendingDraft = res.body())
+                    }
+                } else {
+                    val errMsg = ApiClient.parseErrorMessage(res)
+                    val needsPassword = res.code() == 422 &&
+                        errMsg.contains("password", ignoreCase = true)
+                    if (needsPassword) {
+                        _uiState.update {
+                            it.copy(
+                                isUploading = false,
+                                pendingPasswordPrompt = PendingMediaUpload(uris, sourceType),
+                                errorMessage = errMsg
+                            )
+                        }
+                    } else {
+                        _uiState.update {
+                            it.copy(isUploading = false, errorMessage = errMsg)
+                        }
+                    }
+                }
+            } catch (_: IOException) {
+                // Offline: persist in app-private offline queue for later upload
+                val saved = withContext(Dispatchers.IO) {
+                    offlineQueue.enqueue(uris, sourceType)
+                }
+                _uiState.update {
+                    it.copy(
+                        isUploading = false,
+                        offlineQueueCount = offlineQueue.count(),
+                        statusMessage = if (saved) {
+                            "Offline — receipt saved to queue and will upload when back online."
+                        } else {
+                            "Network error during upload."
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isUploading = false, errorMessage = e.localizedMessage ?: "Upload failed")
+                }
+            }
+        }
+    }
+
+    fun flushOfflineQueue() {
+        if (!_uiState.value.isAuthenticated || _uiState.value.isUploading) return
+        viewModelScope.launch {
+            val batches = withContext(Dispatchers.IO) { offlineQueue.listBatches() }
+            if (batches.isEmpty()) return@launch
+            var uploaded = 0
+            val textMedia = "text/plain".toMediaType()
+            for (batch in batches) {
+                try {
+                    val parts = withContext(Dispatchers.IO) { offlineQueue.toMultipartParts(batch) }
+                    if (parts.isEmpty()) {
+                        offlineQueue.remove(batch.id)
+                        continue
+                    }
+                    val sourceBody = batch.sourceType?.toRequestBody(textMedia)
+                    val res = api.ingestMedia(parts, null, sourceBody)
+                    if (res.isSuccessful) {
+                        offlineQueue.remove(batch.id)
+                        uploaded++
+                    }
+                } catch (_: Exception) {
+                    break
+                }
+            }
+            _uiState.update {
+                it.copy(
+                    offlineQueueCount = offlineQueue.count(),
+                    statusMessage = if (uploaded > 0) {
+                        "Uploaded $uploaded queued receipt(s) — check Pending Drafts!"
+                    } else it.statusMessage
+                )
+            }
+            if (uploaded > 0) refreshDashboard()
+        }
+    }
+
+    fun openPendingDrafts() {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.getPendingTransactions()
+                if (res.isSuccessful && res.body() != null) {
+                    val pending = res.body()!!.map { t ->
+                        DraftTransactionPreview(
+                            id = t.id,
+                            txDate = t.txDate,
+                            vendor = t.vendor,
+                            description = t.description,
+                            categoryId = t.categoryId ?: "",
+                            categoryName = t.categoryName ?: "Uncategorized",
+                            amount = t.amount,
+                            txType = t.txType,
+                            currency = t.currency,
+                            source = t.source,
+                            status = t.status,
+                            confidence = 1.0,
+                            potentialDuplicateIds = emptyList()
+                        )
+                    }
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            pendingDraft = IngestResponse(
+                                documentId = "pending",
+                                sourceType = "pending_drafts",
+                                modelUsed = "saved drafts",
+                                openingBalance = null,
+                                closingBalance = null,
+                                reconciled = false,
+                                reconciliationDiff = null,
+                                transactions = pending,
+                                skippedExactDuplicates = 0
+                            )
+                        )
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to load drafts")
+                }
+            }
+        }
+    }
+
+    fun dismissPasswordPrompt() {
+        _uiState.update { it.copy(pendingPasswordPrompt = null) }
+    }
+
+    fun dismissDraftDialog() {
+        _uiState.update { it.copy(pendingDraft = null) }
+    }
+
+    fun confirmDrafts(
+        confirmed: List<ConfirmTransactionItem>,
+        discardIds: List<String>
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.confirmTransactions(
+                    ConfirmTransactionsRequest(transactions = confirmed, discardIds = discardIds)
+                )
+                if (res.isSuccessful && res.body() != null) {
+                    val body = res.body()!!
+                    _uiState.update {
+                        it.copy(
+                            isLoading = false,
+                            pendingDraft = null,
+                            statusMessage = "Saved ${body.confirmedCount} transaction(s)"
+                        )
+                    }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Confirm failed")
+                }
+            }
+        }
+    }
+
+    fun createManualTransaction(
+        txDate: String,
+        vendor: String,
+        amount: String,
+        txType: String,
+        currency: String,
+        categoryName: String,
+        description: String?,
+        isRecurring: Boolean,
+        walletId: String? = null,
+        tags: List<String> = emptyList()
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.createTransaction(
+                    CreateTransactionRequest(
+                        txDate = txDate,
+                        vendor = vendor.trim(),
+                        description = description?.trim()?.takeIf { it.isNotEmpty() },
+                        categoryName = categoryName,
+                        walletId = walletId,
+                        amount = amount.trim(),
+                        txType = txType,
+                        currency = currency,
+                        isRecurring = isRecurring,
+                        tags = tags
+                    )
+                )
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Transaction added") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to add transaction")
+                }
+            }
+        }
+    }
+
+    fun updateTransaction(
+        id: String,
+        txDate: String,
+        vendor: String,
+        amount: String,
+        txType: String,
+        currency: String,
+        categoryName: String,
+        description: String?,
+        isRecurring: Boolean,
+        walletId: String? = null,
+        tags: List<String>? = null
+    ) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.updateTransaction(
+                    id = id,
+                    request = UpdateTransactionRequest(
+                        txDate = txDate,
+                        vendor = vendor.trim(),
+                        description = description?.trim(),
+                        categoryName = categoryName,
+                        walletId = walletId,
+                        amount = amount.trim(),
+                        txType = txType,
+                        currency = currency,
+                        isRecurring = isRecurring,
+                        tags = tags
+                    )
+                )
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Transaction updated") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Update failed")
+                }
+            }
+        }
+    }
+
+    fun deleteTransaction(id: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.deleteTransaction(id)
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Transaction deleted") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Delete failed")
+                }
+            }
+        }
+    }
+
+    fun upsertBudget(categoryName: String, monthlyLimit: String) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.upsertBudget(UpsertBudgetRequest(categoryName, monthlyLimit.trim()))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(isLoading = false, statusMessage = "Budget saved for $categoryName") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to save budget")
+                }
+            }
+        }
+    }
+
+    fun createCategory(name: String) {
+        val clean = name.trim()
+        if (clean.isEmpty()) return
+        viewModelScope.launch {
+            try {
+                val res = api.createCategory(CreateCategoryRequest(clean))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Category \"$clean\" added") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add category") }
+            }
+        }
+    }
+
+    fun generateMonthlyInsights() {
+        val ym = _uiState.value.selectedMonth
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingInsights = true, errorMessage = null) }
+            try {
+                val res = api.getMonthlyInsights(ym.year, ym.monthValue)
+                if (res.isSuccessful && res.body() != null) {
+                    _uiState.update {
+                        it.copy(isLoadingInsights = false, insightsTips = res.body()!!.tips)
+                    }
+                } else {
+                    _uiState.update {
+                        it.copy(isLoadingInsights = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoadingInsights = false, errorMessage = e.localizedMessage ?: "Insights failed")
+                }
+            }
+        }
+    }
+
+    fun createGoal(name: String, goalType: String, targetAmount: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.createGoal(CreateGoalRequest(name.trim(), goalType, targetAmount.trim()))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Goal added") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add goal") }
+            }
+        }
+    }
+
+    fun updateGoalProgress(id: String, newAmount: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.updateGoal(id, UpdateGoalRequest(newAmount.trim()))
+                if (res.isSuccessful) refreshDashboard()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun createIou(personName: String, direction: String, amount: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.createIou(CreateIouRequest(personName.trim(), direction, amount.trim()))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "IOU added") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add IOU") }
+            }
+        }
+    }
+
+    fun toggleSettleIou(id: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.settleIou(id)
+                if (res.isSuccessful) refreshDashboard()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun zeroOutBalance() {
+        val ym = _uiState.value.selectedMonth
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, errorMessage = null) }
+            try {
+                val res = api.zeroBalance(ZeroBalanceRequest(ym.year, ym.monthValue))
+                if (res.isSuccessful && res.body() != null) {
+                    val msg = if (res.body()!!.alreadyZero) "Balance is already 0" else "Balance zeroed out to 0"
+                    _uiState.update { it.copy(isLoading = false, statusMessage = msg) }
+                    refreshDashboard()
+                } else {
+                    _uiState.update {
+                        it.copy(isLoading = false, errorMessage = ApiClient.parseErrorMessage(res))
+                    }
+                }
+            } catch (e: Exception) {
+                _uiState.update {
+                    it.copy(isLoading = false, errorMessage = e.localizedMessage ?: "Failed to zero balance")
+                }
+            }
+        }
+    }
+
+    // --- Quick-Add Templates (#1) ---
+    fun useTemplate(id: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.useTemplate(id)
+                if (res.isSuccessful && res.body() != null) {
+                    val tx = res.body()!!
+                    _uiState.update { it.copy(statusMessage = "Logged ${tx.vendor} (${tx.amount} ${tx.currency})") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Template failed") }
+            }
+        }
+    }
+
+    fun createTemplate(label: String, amount: String, categoryName: String) {
+        viewModelScope.launch {
+            try {
+                val cur = _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+                val res = api.createTemplate(
+                    CreateTemplateRequest(
+                        label = label.trim(),
+                        vendor = label.trim(),
+                        amount = amount.trim(),
+                        categoryName = categoryName,
+                        currency = cur
+                    )
+                )
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Template saved") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save template") }
+            }
+        }
+    }
+
+    fun deleteTemplate(id: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.deleteTemplate(id)
+                if (res.isSuccessful) refreshDashboard()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // --- Wallets & Internal Transfers (#2) ---
+    fun createWallet(name: String, walletType: String, initialBalance: String) {
+        viewModelScope.launch {
+            try {
+                val cur = _uiState.value.monthlySpending?.baseCurrency ?: "VND"
+                val res = api.createWallet(
+                    CreateWalletRequest(
+                        name = name.trim(),
+                        walletType = walletType,
+                        initialBalance = initialBalance.trim().ifEmpty { "0" },
+                        currency = cur
+                    )
+                )
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Wallet added") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to add wallet") }
+            }
+        }
+    }
+
+    fun transferWallet(fromId: String, toId: String, amount: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.transferWallet(TransferWalletRequest(fromId, toId, amount.trim()))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Internal transfer recorded") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Transfer failed") }
+            }
+        }
+    }
+
+    // --- Date Range / YTD (#5) ---
+    fun setDateRange(startDate: String, endDate: String) {
+        _uiState.update { it.copy(rangeStart = startDate, rangeEnd = endDate) }
+        refreshDashboard()
+    }
+
+    fun clearDateRange() {
+        _uiState.update { it.copy(rangeStart = null, rangeEnd = null, rangeSummary = null) }
+        refreshDashboard()
+    }
+
+    // --- Merchant Rules (#6) ---
+    fun upsertRule(pattern: String, categoryName: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.upsertRule(UpsertMerchantRuleRequest(pattern.trim(), categoryName))
+                if (res.isSuccessful) {
+                    _uiState.update { it.copy(statusMessage = "Rule saved") }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Failed to save rule") }
+            }
+        }
+    }
+
+    fun deleteRule(id: String) {
+        viewModelScope.launch {
+            try {
+                val res = api.deleteRule(id)
+                if (res.isSuccessful) refreshDashboard()
+            } catch (_: Exception) {}
+        }
+    }
+
+    // --- Full JSON Backup & Restore (#7) ---
+    fun exportBackupJson(onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val res = api.exportBackup()
+                if (res.isSuccessful && res.body() != null) {
+                    val json = withContext(Dispatchers.IO) { res.body()!!.string() }
+                    onReady(json)
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Export failed") }
+            }
+        }
+    }
+
+    fun importBackupJson(json: String) {
+        viewModelScope.launch {
+            try {
+                val body = json.toRequestBody("application/json".toMediaType())
+                val res = api.importBackup(body)
+                if (res.isSuccessful && res.body() != null) {
+                    val r = res.body()!!
+                    _uiState.update {
+                        it.copy(statusMessage = "Restored ${r.transactionsAdded} tx (${r.transactionsSkipped} skipped), ${r.walletsAdded} wallets")
+                    }
+                    refreshDashboard()
+                } else {
+                    _uiState.update { it.copy(errorMessage = ApiClient.parseErrorMessage(res)) }
+                }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(errorMessage = e.localizedMessage ?: "Import failed") }
+            }
+        }
+    }
+
+    private fun flushQueuedUpload() {
+        val pending = queuedShareUpload ?: return
+        queuedShareUpload = null
+        uploadMedia(pending.uris, pending.sourceType)
+    }
+}

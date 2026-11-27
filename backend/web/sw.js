@@ -1,5 +1,5 @@
-const CACHE_NAME = "spending-tracker-v1";
-const SHELL_ASSETS = ["/", "/assets/styles.css", "/assets/app.js", "/manifest.webmanifest"];
+const CACHE_NAME = "spending-tracker-v210";
+const SHELL_ASSETS = ["/", "/assets/styles.css?v=2.1.0", "/assets/app.js?v=2.1.0", "/manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
@@ -17,14 +17,20 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) {
+  if (
+    event.request.method !== "GET" ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith("/api/")
+  ) {
     return;
   }
   event.respondWith(
     fetch(event.request)
       .then((resp) => {
-        const clone = resp.clone();
-        caches.open(CACHE_NAME).then((c) => c.put(event.request, clone));
+        if (resp && resp.ok) {
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then((c) => c.put(event.request, clone)).catch(() => {});
+        }
         return resp;
       })
       .catch(() => caches.match(event.request))
